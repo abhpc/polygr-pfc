@@ -40,4 +40,6 @@ $ git clone https://github.com/petenez/pfc
 $ cd pfc/src
 $ mpicc pfc.c -lfftw3_mpi -lfftw3 -lm -Ofast -Wall -I/opt/devt/fftw3-mpi/include -L/opt/devt/fftw3-mpi/lib -o pfc
 ```
-##### 输入文件解析
+编译成功后，在src目录下会生成可执行文件pfc。
+
+#### 3.输入文件解析

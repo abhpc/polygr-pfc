@@ -12,6 +12,7 @@
 # make -j 10
 # make install
 ```
+安装好以后，记得将/opt/devt/mpich3/bin添加到系统的PATH中，方便后面使用。
 
 下载FFTW3源代码并安装：
 
@@ -39,3 +40,4 @@ $ git clone https://github.com/petenez/pfc
 $ cd pfc/src
 $ mpicc pfc.c -lfftw3_mpi -lfftw3 -lm -Ofast -Wall -I/opt/devt/fftw3-mpi/include -L/opt/devt/fftw3-mpi/lib -o pfc
 ```
+##### 输入文件解析

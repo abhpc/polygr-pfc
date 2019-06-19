@@ -35,7 +35,7 @@ Hirvonen et al., Physical Review B 94, 035414 (2016)
 
 ##### 编译安装
 ```
-# git clone https://github.com/petenez/pfc
-# cd pfc/src
-# mpicc pfc.c -lfftw3_mpi -lfftw3 -lm -Ofast -Wall -I/opt/devt/fftw3-mpi/include -L/opt/devt/fftw3-mpi/lib -o pfc
+$ git clone https://github.com/petenez/pfc
+$ cd pfc/src
+$ mpicc pfc.c -lfftw3_mpi -lfftw3 -lm -Ofast -Wall -I/opt/devt/fftw3-mpi/include -L/opt/devt/fftw3-mpi/lib -o pfc
 ```

@@ -82,15 +82,17 @@ java -jar $PFC_JAR/plotter.jar step2-t-# step2-t-# $WW $HH 0 1000 10000
 echo "Images done."
 echo ""
 
-# 将xy文件转化为xyz文件，第一列id从0开始改为从1开始，即第一列+1，第二列为原子类型id（统一设置为1），
-# 第三列、第四列为x,y，第五列z统一定义为0。
+# Convert the XY file to an XYZ file, where the first column of IDs is changed from starting at 0 to starting at 1 by adding 1 to the first column. 
+# The second column represents the atom type ID (uniformly set to 1).
+# The third and fourth columns represent the x and y coordinates, respectively.
+# The fifth column represents the z coordinate, which is uniformly defined as 0.
 awk '{print $1+1,1,$2,$3,0}' step2-t-10000.xy > graphene.xyz
 atomN=`tail -1 graphene.xyz |awk '{print $1}'`
 sed -i "1i\ " graphene.xyz
 sed -i "1i$atomN" graphene.xyz
 
 
-# 调用OVITO的Python解释器，读入xyz文件，导出为lammps data文件graphene.data
+# Call the Python interpreter of OVITO, read an XYZ file, and export it as a LAMMPS data file named "graphene.data".
 rm -rf xyz2lmp.py
 cat << EOF > xyz2lmp.py
 from ovito.io import import_file
@@ -99,9 +101,9 @@ node = import_file("graphene.xyz", columns = ["Particle Identifier", "Particle T
 export_file(node, "graphene.data", "lammps_data")
 EOF
 ovitos xyz2lmp.py
+rm -rf xyz2lmp.py
 
-
-# 注意此时graphene.data的z方向定义为(0.0, 0.0)，需要改成(-10, 10)才行。
+# Note that in the current graphene.data file, the z-direction is defined as (0.0, 0.0), but it needs to be changed to (-10, 10).
 sed -i "s@0.0 0.0 zlo zhi@-10.0 10.0 zlo zhi@g" graphene.data
 
 mv graphene.data $SLURM_JOB_NAME.data

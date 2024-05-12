@@ -302,7 +302,7 @@ void initialize_system(struct Arrays *arrays, FILE *input) {
 // saves state into a file
 void write_state(struct Arrays *arrays, struct Relaxation *relaxation, struct Output *output) {
 	char filename[128];			// filename
-	sprintf(filename, "%s-t-%d.dat", output->name, relaxation->t);
+	sprintf(filename, "%s-t -%d.dat", output->name, relaxation->t);
 	FILE *file;					// file stream
 	int Wp = 2*(arrays->W/2+1);
 	int i, w, h, k;

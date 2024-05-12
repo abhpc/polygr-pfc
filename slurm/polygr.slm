@@ -1,0 +1,108 @@
+#!/bin/bash
+#SBATCH --job-name=polygrpfc
+
+# 提交到哪个队列（分区）
+#SBATCH --partition=MX
+
+# 使用多少个节点
+#SBATCH --nodes=4
+
+# 每个节点使用多少核 强烈注意：核数必须为该队列单个节点的核数
+#SBATCH --ntasks-per-node=48
+
+# 生成错误和输出文件
+#SBATCH --error=%j.err
+#SBATCH --output=%j.out
+
+# 使用module加载polygrpfc
+source /etc/bashrc
+module load polygrpfc/1.1
+
+export DISPLAY=""
+
+# Width, unit: ang
+W=1000
+
+# Height, unit: ang
+H=1000
+
+# Number of grains
+N=100
+
+# Radius of seed
+R=2
+
+# 根据公式计算得到模型长WW、宽HH，晶粒个数NN、晶粒初始尺寸RR
+######################################
+WW=`awk 'BEGIN{print int(1024/243*'$W')}'`
+HH=`awk 'BEGIN{print int(1024/243*'$H')}'`
+NN=$N
+RR=$R
+
+# 这里输出一下计算结果
+echo "WW=$WW, HH=$HH, NN=$NN RR=$RR"
+
+# 将模板文件step1.in和step2.in拷贝到当前目录
+rm -rf *.in
+cp $PFC_INP/step*.in ./
+
+# 利用shell生成一个随机数
+RX=`head /dev/urandom|cksum| awk '{print $1}'`
+
+# 将随机数RX、长WW、宽HH、晶粒个数NN和初始晶粒尺寸RR写入到当前目录下的step1.in文件
+sed -i "s@xabc@$RX@g" step1.in
+sed -i "s@WW@$WW@g" step1.in
+sed -i "s@HH@$HH@g" step1.in
+sed -i "s@NN@$NN@g" step1.in
+sed -i "s@RR@$RR@g" step1.in
+
+# 注意这里把长WW和宽HH写入到当前目录下的step2.in文件
+sed -i "s@WW@$WW@g" step2.in
+sed -i "s@HH@$HH@g" step2.in
+
+# 第一步计算：step 1
+echo "Now run Step 1:"
+mpirun polygrpfc step1
+echo "Step 1 done."
+echo ""
+
+
+# 第二步计算：step2
+echo "Now run Step 2:"
+mpirun polygrpfc step2
+echo "Step 2 done."
+echo ""
+
+
+# 将step2的最后一步（10000步）文件“step2-t:10000.dat”转化为xy文件，注意这里的原子id从0开始。
+echo "Convert the images of Step 1 and 2:"
+java -jar $PFC_JAR/coordinator.jar step2-t-10000.dat $WW $HH 0.7 0.7 7.3 2.46 \
+          step2-t-10000.xy step2-t-10000.nh
+java -jar $PFC_JAR/plotter.jar step1-t-# step1-t-# $WW $HH 0 1000 10000
+java -jar $PFC_JAR/plotter.jar step2-t-# step2-t-# $WW $HH 0 1000 10000
+echo "Images done."
+echo ""
+
+# 将xy文件转化为xyz文件，第一列id从0开始改为从1开始，即第一列+1，第二列为原子类型id（统一设置为1），
+# 第三列、第四列为x,y，第五列z统一定义为0。
+awk '{print $1+1,1,$2,$3,0}' step2-t-10000.xy > graphene.xyz
+atomN=`tail -1 graphene.xyz |awk '{print $1}'`
+sed -i "1i\ " graphene.xyz
+sed -i "1i$atomN" graphene.xyz
+
+
+# 调用OVITO的Python解释器，读入xyz文件，导出为lammps data文件graphene.data
+rm -rf xyz2lmp.py
+cat << EOF > xyz2lmp.py
+from ovito.io import import_file
+from ovito.io import export_file
+node = import_file("graphene.xyz", columns = ["Particle Identifier", "Particle Type", "Position.X", "Position.Y", "Position.Z"])
+export_file(node, "graphene.data", "lammps_data")
+EOF
+ovitos xyz2lmp.py
+
+
+# 注意此时graphene.data的z方向定义为(0.0, 0.0)，需要改成(-10, 10)才行。
+sed -i "s@0.0 0.0 zlo zhi@-10.0 10.0 zlo zhi@g" graphene.data
+
+mv graphene.data $SLURM_JOB_NAME.data

@@ -1,0 +1,14 @@
+#%Module 1.0
+conflict polygrpfc
+
+prereq  mkl/2023.1.0
+prereq  mpi/2021.9.0
+prereq  gcc/7.5.0
+prereq  openjdk/13.0.1
+prereq  ovito/2.9.0
+
+set             PFC_DIR                 /opt/apps/mechanics/polygrpfc/1.1
+
+prepend-path    PATH                    $PFC_DIR/bin
+setenv          PFC_JAR                 $PFC_DIR/java
+setenv          PFC_INP                 $PFC_DIR/example

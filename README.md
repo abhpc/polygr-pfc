@@ -3,14 +3,17 @@
 Some codes in this program are forked from https://github.com/petenez/pfc. However, the author stated that he has leaved academia and had limited time to prepare these tools for publication. Since more codes have been added, I created this repository for easily generate initial configuration of polycrystalline graphene in LAMMPS data format.
 
 # Table of Contents <!-- omit in toc -->
-- [1 Build phase field program](#1-build-phase-field-program)
+- [1 System requirement](#1-system-requirement)
+- [2 Build phase field program](#2-build-phase-field-program)
 - [2](#2)
     - [2.下载安装PFC程序](#2下载安装pfc程序)
       - [编译安装](#编译安装)
     - [3.输入文件解析](#3输入文件解析)
 
 
-## 1 Build phase field program
+## 1 System requirement
+
+## 2 Build phase field program
 
 
 

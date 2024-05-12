@@ -8,13 +8,15 @@ Some codes in this program are forked from https://github.com/petenez/pfc. Howev
   - [1.2 Install OpenJDK 13.0.1](#12-install-openjdk-1301)
   - [1.3 OVITO 2.9.0](#13-ovito-290)
 - [2 Build phase field program](#2-build-phase-field-program)
-- [3](#3)
-    - [2.下载安装PFC程序](#2下载安装pfc程序)
-      - [编译安装](#编译安装)
-    - [3.输入文件解析](#3输入文件解析)
+- [3 Example](#3-example)
 
 
 ## 1 System requirement
+
+These packages below are required for running this program:
+```bash
+mkl/2023.1.0  mpi/2021.9.0  gcc/7.5.0  openjdk/13.0.1  ovito/2.9.0
+```
 
 ### 1.1 Install FFTW-MPI
 
@@ -35,17 +37,10 @@ make install
 
 ## 2 Build phase field program
 
-## 3
-
-
-#### 2.下载安装PFC程序
-
-##### 编译安装
+```bash
+git clone https://github.com/petenez/pfc
+cd pfc/src
+mpicc pfc.c -lfftw3_mpi -lfftw3 -lm -Ofast -Wall -I/opt/devt/fftw3-mpi/include -L/opt/devt/fftw3-mpi/lib -o pfc
 ```
-$ git clone https://github.com/petenez/pfc
-$ cd pfc/src
-$ mpicc pfc.c -lfftw3_mpi -lfftw3 -lm -Ofast -Wall -I/opt/devt/fftw3-mpi/include -L/opt/devt/fftw3-mpi/lib -o pfc
-```
-编译成功后，在src目录下会生成可执行文件pfc。
 
-#### 3.输入文件解析
+## 3 Example

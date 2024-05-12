@@ -1,6 +1,20 @@
-### 使用相场方法建模多晶石墨烯
+# Modeling polycrystalline graphene for molecualr dynamics simulations via phase field method <!-- omit in toc -->
 
-#### 1.安装MPI和FFTW-MPI
+Some codes of this program is forked from https://github.com/petenez/pfc. However, the author stated that he has leaved academia and had limited time to prepare these tools for publication. Since more codes have been added, I created this repositorya for easily generate initial configuration of polycrystalline graphene in LAMMPS data format.
+
+# Table of Contents <!-- omit in toc -->
+- [1 Build phase field program](#1-build-phase-field-program)
+- [2](#2)
+    - [2.下载安装PFC程序](#2下载安装pfc程序)
+      - [编译安装](#编译安装)
+    - [3.输入文件解析](#3输入文件解析)
+
+
+## 1 Build phase field program
+
+
+
+## 2
 
 如果已经安装Intel Parallel Studio的话，可以直接使用mpicc（对应C编译器为系统gcc）；如果没有的话，可以安装openmpi或者mpich，这里推荐使用mpich：
 

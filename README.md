@@ -1,6 +1,6 @@
-# Modeling polycrystalline graphene for molecualr dynamics simulations via phase field method <!-- omit in toc -->
+# Modeling polycrystalline graphene for molecular dynamics simulations via phase field method <!-- omit in toc -->
 
-Some codes of this program is forked from https://github.com/petenez/pfc. However, the author stated that he has leaved academia and had limited time to prepare these tools for publication. Since more codes have been added, I created this repositorya for easily generate initial configuration of polycrystalline graphene in LAMMPS data format.
+Some codes in this program are forked from https://github.com/petenez/pfc. However, the author stated that he has leaved academia and had limited time to prepare these tools for publication. Since more codes have been added, I created this repository for easily generate initial configuration of polycrystalline graphene in LAMMPS data format.
 
 # Table of Contents <!-- omit in toc -->
 - [1 Build phase field program](#1-build-phase-field-program)

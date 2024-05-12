@@ -4,8 +4,9 @@ Some codes in this program are forked from https://github.com/petenez/pfc. Howev
 
 # Table of Contents <!-- omit in toc -->
 - [1 System requirement](#1-system-requirement)
+  - [Install FFTW-MPI](#install-fftw-mpi)
 - [2 Build phase field program](#2-build-phase-field-program)
-- [2](#2)
+- [3](#3)
     - [2.下载安装PFC程序](#2下载安装pfc程序)
       - [编译安装](#编译安装)
     - [3.输入文件解析](#3输入文件解析)
@@ -13,15 +14,24 @@ Some codes in this program are forked from https://github.com/petenez/pfc. Howev
 
 ## 1 System requirement
 
-## 2 Build phase field program
+### Install FFTW-MPI
 
 
 
-## 2
+```bash
+# wget http://www.fftw.org/fftw-3.3.8.tar.gz
+# tar -vxf fftw-3.3.8.tar.gz
+# cd fftw-3.3.8
+# ./configure --enable-mpi --prefix="/opt/devt/fftw3-mpi"
+# make -j 10
+# make install
+```
+
+
 
 如果已经安装Intel Parallel Studio的话，可以直接使用mpicc（对应C编译器为系统gcc）；如果没有的话，可以安装openmpi或者mpich，这里推荐使用mpich：
 
-```
+```bash
 # wget http://www.mpich.org/static/downloads/3.3.1/mpich-3.3.1.tar.gz
 # tar -vxf mpich-3.3.1.tar.gz
 # cd mpich-3.3.1/
@@ -33,14 +43,15 @@ Some codes in this program are forked from https://github.com/petenez/pfc. Howev
 
 下载FFTW3源代码并安装：
 
-```
-# wget http://www.fftw.org/fftw-3.3.8.tar.gz
-# tar -vxf fftw-3.3.8.tar.gz
-# cd fftw-3.3.8
-# ./configure --enable-mpi --prefix="/opt/devt/fftw3-mpi"
-# make -j 10
-# make install
-```
+
+
+
+## 2 Build phase field program
+
+
+
+## 3
+
 
 #### 2.下载安装PFC程序
 

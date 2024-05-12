@@ -4,7 +4,7 @@ Some codes in this program are forked from https://github.com/petenez/pfc. Howev
 
 # Table of Contents <!-- omit in toc -->
 - [1 System requirement](#1-system-requirement)
-  - [Install FFTW-MPI](#install-fftw-mpi)
+  - [1.1 Install FFTW-MPI](#11-install-fftw-mpi)
 - [2 Build phase field program](#2-build-phase-field-program)
 - [3](#3)
     - [2.下载安装PFC程序](#2下载安装pfc程序)
@@ -14,7 +14,7 @@ Some codes in this program are forked from https://github.com/petenez/pfc. Howev
 
 ## 1 System requirement
 
-### Install FFTW-MPI
+### 1.1 Install FFTW-MPI
 
 
 

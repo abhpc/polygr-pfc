@@ -1,73 +1,72 @@
 #!/bin/bash
 #SBATCH --job-name=polygrpfc
 
-# 提交到哪个队列（分区）
+# Patition to submit
 #SBATCH --partition=MX
 
-# 使用多少个节点
+# The number of computing nodes
 #SBATCH --nodes=4
 
-# 每个节点使用多少核 强烈注意：核数必须为该队列单个节点的核数
+# The number of threads per node
 #SBATCH --ntasks-per-node=48
 
-# 生成错误和输出文件
+# Out and error files
 #SBATCH --error=%j.err
 #SBATCH --output=%j.out
 
-# 使用module加载polygrpfc
+# Load polygrpfc module
 source /etc/bashrc
 module load polygrpfc/1.1
 
+# Unset environment variable DISPLAY for running headless OVITO
 export DISPLAY=""
 
-# Width, unit: ang
+# Define the width of graphene sheet, unit: ang
 W=1000
 
-# Height, unit: ang
+# Define the height of graphene sheet, unit: ang
 H=1000
 
 # Number of grains
 N=100
 
-# Radius of seed
+# Initial radius of seed, unit: ang
 R=2
 
-# 根据公式计算得到模型长WW、宽HH，晶粒个数NN、晶粒初始尺寸RR
-######################################
+######################################################################################
+# The following lines do not require modification unless their meaning is understood #
+######################################################################################
+
+# Calculate the parameters for phase field crystal program
 WW=`awk 'BEGIN{print int(1024/243*'$W')}'`
 HH=`awk 'BEGIN{print int(1024/243*'$H')}'`
 NN=$N
 RR=$R
 
-# 这里输出一下计算结果
-echo "WW=$WW, HH=$HH, NN=$NN RR=$RR"
-
-# 将模板文件step1.in和step2.in拷贝到当前目录
+# copy the input templates, step1.in and step2.in, into current directory.
 rm -rf *.in
 cp $PFC_INP/step*.in ./
 
-# 利用shell生成一个随机数
+# Generate a random number, and write necessary parameters into input file step1.in
 RX=`head /dev/urandom|cksum| awk '{print $1}'`
-
-# 将随机数RX、长WW、宽HH、晶粒个数NN和初始晶粒尺寸RR写入到当前目录下的step1.in文件
 sed -i "s@xabc@$RX@g" step1.in
 sed -i "s@WW@$WW@g" step1.in
 sed -i "s@HH@$HH@g" step1.in
 sed -i "s@NN@$NN@g" step1.in
 sed -i "s@RR@$RR@g" step1.in
 
-# 注意这里把长WW和宽HH写入到当前目录下的step2.in文件
+# Set the width and height in input file step2.in
 sed -i "s@WW@$WW@g" step2.in
 sed -i "s@HH@$HH@g" step2.in
 
-# 第一步计算：step 1
+# Start the initial run: step1
 echo "Now run Step 1:"
 mpirun polygrpfc step1
 echo "Step 1 done."
 echo ""
 
 
-# 第二步计算：step2
+# Start relaxing run: step2
 echo "Now run Step 2:"
 mpirun polygrpfc step2
 echo "Step 2 done."

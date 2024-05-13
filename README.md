@@ -6,7 +6,7 @@ Some codes in this program are forked from https://github.com/petenez/pfc. Howev
 - [1 System requirements](#1-system-requirements)
   - [1.1 Install FFTW-MPI](#11-install-fftw-mpi)
   - [1.2 Install OpenJDK 13.0.1](#12-install-openjdk-1301)
-  - [1.3 OVITO 2.9.0](#13-ovito-290)
+  - [1.3 Install OVITO 2.9.0](#13-install-ovito-290)
 - [2 Build phase field program](#2-build-phase-field-program)
 - [3 Example](#3-example)
 
@@ -31,7 +31,7 @@ make install
 ```
 ### 1.2 Install OpenJDK 13.0.1
 
-### 1.3 OVITO 2.9.0
+### 1.3 Install OVITO 2.9.0
 
 
 

@@ -1,109 +1,53 @@
-#!/bin/bash
+#!/bin/bash -e
 #SBATCH --job-name=polygrpfc
-
-# Patition to submit
-#SBATCH --partition=MX
-
-# The number of computing nodes
-#SBATCH --nodes=4
-
-# The number of threads per node
-#SBATCH --ntasks-per-node=48
-
-# Out and error files
-#SBATCH --error=%j.err
+#SBATCH --partition=Debug
+#SBATCH --nodes=1
+#SBATCH --ntasks=32
+#SBATCH --ntasks-per-node=32
+#SBATCH --cpus-per-task=1
+#SBATCH --gpus-per-node=4
+#SBATCH --exclusive
+#SBATCH --mem=0
 #SBATCH --output=%j.out
+#SBATCH --error=%j.err
 
-# Load polygrpfc module
+# 1. Load the solver environment and retain the project path for postprocessing.
 source /etc/bashrc
-module load polygrpfc/1.1
+module purge
+module load pfc/2026.1
+PFC_DIR="$PFC_ROOT"
+PFC_RUN_ROOT="$PFC_DIR/runs"
+export PFC_DIR
+export DISPLAY=
 
-# Unset environment variable DISPLAY for running headless OVITO
-export DISPLAY=""
+# 2. Create a new directory for this job.
+PFC_JOB_DIR="$PFC_RUN_ROOT/$SLURM_JOB_ID"
+mkdir -p "$PFC_RUN_ROOT"
+mkdir "$PFC_JOB_DIR"
+mkdir "$PFC_JOB_DIR/dcu"
 
-# Define the width of graphene sheet, unit: ang
+# 3. Prepare the original two-stage input. W/H are in angstrom.
 W=1000
-
-# Define the height of graphene sheet, unit: ang
 H=1000
-
-# Number of grains
 N=100
-
-# Initial radius of seed, unit: ang
 R=2
+PFC_WIDTH=$(awk -v value="$W" 'BEGIN {print int(1024/243*value)}')
+PFC_HEIGHT=$(awk -v value="$H" 'BEGIN {print int(1024/243*value)}')
+cp "$PFC_DIR/example/step1.in" "$PFC_DIR/example/step2.in" "$PFC_JOB_DIR/dcu/"
+cd "$PFC_JOB_DIR/dcu"
+RX=$(od -An -N4 -tu4 /dev/urandom | tr -d '[:space:]')
+sed -i "s@xabc@$RX@g;s@WW@$PFC_WIDTH@g;s@HH@$PFC_HEIGHT@g;s@NN@$N@g;s@RR@$R@g" step1.in
+sed -i "s@WW@$PFC_WIDTH@g;s@HH@$PFC_HEIGHT@g" step2.in
 
-######################################################################################
-# The following lines do not require modification unless their meaning is understood #
-######################################################################################
+# 4. Grow grains, then relax the first-stage result.
+mpirun -bootstrap fork -np 32 -ppn 32 polygrpfc step1 > step1.stdout 2> step1.stderr
+mpirun -bootstrap fork -np 32 -ppn 32 polygrpfc step2 > step2.stdout 2> step2.stderr
 
-# Calculate the parameters for phase field crystal program
-WW=`awk 'BEGIN{print int(1024/243*'$W')}'`
-HH=`awk 'BEGIN{print int(1024/243*'$H')}'`
-NN=$N
-RR=$R
+# 5. Convert the final field using the existing Java/OVITO pipeline.
+bash -e "$PFC_DIR/slurm/convert.sh" step2-10000.dat "$PFC_WIDTH" "$PFC_HEIGHT"
 
-# copy the input templates, step1.in and step2.in, into current directory.
-rm -rf *.in
-cp $PFC_INP/step*.in ./
-
-# Generate a random number, and write necessary parameters into input file step1.in
-RX=`head /dev/urandom|cksum| awk '{print $1}'`
-sed -i "s@xabc@$RX@g" step1.in
-sed -i "s@WW@$WW@g" step1.in
-sed -i "s@HH@$HH@g" step1.in
-sed -i "s@NN@$NN@g" step1.in
-sed -i "s@RR@$RR@g" step1.in
-
-# Set the width and height in input file step2.in
-sed -i "s@WW@$WW@g" step2.in
-sed -i "s@HH@$HH@g" step2.in
-
-# Start the initial run: step1
-echo "Now run Step 1:"
-mpirun polygrpfc step1
-echo "Step 1 done."
-echo ""
-
-
-# Start relaxing run: step2
-echo "Now run Step 2:"
-mpirun polygrpfc step2
-echo "Step 2 done."
-echo ""
-
-
-# Convert the file "step2-t-10000.dat" from step 2, the last step (10000 steps), into an XY file, noting that the atom IDs start from 0 here.
-echo "Convert the images of Step 1 and 2:"
-java -jar $PFC_JAR/coordinator.jar step2-t-10000.dat $WW $HH 0.7 0.7 7.3 2.46 \
-          step2-t-10000.xy step2-t-10000.nh
-java -jar $PFC_JAR/plotter.jar step1-t-# step1-t-# $WW $HH 0 1000 10000
-java -jar $PFC_JAR/plotter.jar step2-t-# step2-t-# $WW $HH 0 1000 10000
-echo "Images done."
-echo ""
-
-# Convert the XY file to an XYZ file, where the first column of IDs is changed from starting at 0 to starting at 1 by adding 1 to the first column. 
-# The second column represents the atom type ID (uniformly set to 1).
-# The third and fourth columns represent the x and y coordinates, respectively.
-# The fifth column represents the z coordinate, which is uniformly defined as 0.
-awk '{print $1+1,1,$2,$3,0}' step2-t-10000.xy > graphene.xyz
-atomN=`tail -1 graphene.xyz |awk '{print $1}'`
-sed -i "1i\ " graphene.xyz
-sed -i "1i$atomN" graphene.xyz
-
-
-# Call the Python interpreter of OVITO, read an XYZ file, and export it as a LAMMPS data file named "graphene.data".
-rm -rf xyz2lmp.py
-cat << EOF > xyz2lmp.py
-from ovito.io import import_file
-from ovito.io import export_file
-node = import_file("graphene.xyz", columns = ["Particle Identifier", "Particle Type", "Position.X", "Position.Y", "Position.Z"])
-export_file(node, "graphene.data", "lammps_data")
-EOF
-ovitos xyz2lmp.py
-rm -rf xyz2lmp.py
-
-# Note that in the current graphene.data file, the z-direction is defined as (0.0, 0.0), but it needs to be changed to (-10, 10).
-sed -i "s@0.0 0.0 zlo zhi@-10.0 10.0 zlo zhi@g" graphene.data
-
-mv graphene.data $SLURM_JOB_NAME.data
+# 6. Export grayscale frames.
+module purge
+module load anaconda3/2023.07
+python "$PFC_DIR/source/plotter.py" 'step1-#.dat' 'step1-#.png' "$PFC_WIDTH" "$PFC_HEIGHT" 0 1000 10000 > "$PFC_JOB_DIR/step1-images.stdout" 2> "$PFC_JOB_DIR/step1-images.stderr"
+python "$PFC_DIR/source/plotter.py" 'step2-#.dat' 'step2-#.png' "$PFC_WIDTH" "$PFC_HEIGHT" 0 1000 10000 > "$PFC_JOB_DIR/step2-images.stdout" 2> "$PFC_JOB_DIR/step2-images.stderr"

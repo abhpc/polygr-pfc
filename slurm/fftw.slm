@@ -1,0 +1,29 @@
+#!/bin/bash -e
+#SBATCH --job-name=pfc-fftw
+#SBATCH --partition=Debug
+#SBATCH --nodes=1
+#SBATCH --ntasks=32
+#SBATCH --ntasks-per-node=32
+#SBATCH --cpus-per-task=1
+#SBATCH --gpus-per-node=4
+#SBATCH --exclusive
+#SBATCH --mem=0
+#SBATCH --output=%j.out
+#SBATCH --error=%j.err
+
+source /etc/bashrc
+module purge
+module load pfc/2026.1
+PFC_DIR="$PFC_ROOT"
+FFTW_BUILD="$PFC_DIR/.build/fftw-$SLURM_JOB_ID"
+
+mkdir -p "$PFC_DIR/.build" "$PFC_DIR/.local"
+mkdir "$FFTW_BUILD"
+tar -xzf "$PFC_DIR/.local/sources/fftw-3.3.10.tar.gz" -C "$FFTW_BUILD"
+mkdir "$FFTW_PREFIX"
+cd "$FFTW_BUILD/fftw-3.3.10"
+CFLAGS='-O3 -march=native -ffp-contract=off -Wall' MPICC=mpicc CC=gcc \
+  ./configure --prefix="$FFTW_PREFIX" --enable-mpi --enable-shared \
+  --enable-sse2 --enable-avx --enable-avx2
+make -j32
+make install

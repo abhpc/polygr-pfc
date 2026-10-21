@@ -1,0 +1,8 @@
+# User-requested 100 nm square: 4240*0.7*2.46/7.3 = 1000.175342 angstrom.
+# Frozen V3 performance pair: keep the remaining scientific workload unchanged.
+S 34789847
+O 1000 2000
+A 4240 4240
+I 1 0.7 0.7 7.2552 0.25 -0.1 100 2
+M -0.18 1.0 0.0 1.0 1
+R 2000 0.7 0.7 0.2 0

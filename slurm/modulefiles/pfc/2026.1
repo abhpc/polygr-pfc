@@ -1,0 +1,16 @@
+#%Module1.0
+module-whatis "Double-precision MPI/DCU PFC solver, version 2026.1"
+conflict pfc
+
+module load gcc/13.1.0
+module load mpi/2021.9.0
+module load dtk/26.04
+
+set root [file normalize [file join [file dirname $ModulesCurrentModulefile] ../../..]]
+setenv PFC_ROOT $root
+setenv FFTW_PREFIX $root/.local/fftw-3.3.10
+setenv OMP_NUM_THREADS 1
+setenv I_MPI_PIN 1
+setenv I_MPI_PIN_DOMAIN core
+prepend-path PATH $root/bin
+prepend-path LD_LIBRARY_PATH $root/.local/fftw-3.3.10/lib

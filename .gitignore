@@ -1,0 +1,15 @@
+/bin/
+/build/
+/.build/
+/.local/
+/runs/
+/evidence/
+/yhmsr/
+*.o
+*.a
+*.so
+*.class
+__pycache__/
+*.py[cod]
+*.swp
+.DS_Store

@@ -3,21 +3,130 @@ Author: Petri Hirvonen, petri.hirvonen@aalto.fi
 December 7, 2017
 */
 
+#define _DEFAULT_SOURCE
+#include <ctype.h>
 #include <complex.h>
+#include <dirent.h>
+#include <errno.h>
 #include <fftw3-mpi.h>
 #include <math.h>
+#include <limits.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef PFC_DCU
+#include "pfc_dcu.h"
+#endif
 
 #define pi 3.14159265358979323846264338327
+#define PFC_PATH 4096
+
+static void fail(const char *message) {
+	fprintf(stderr, "PFC error: %s (%s)\n", message, strerror(errno));
+	MPI_Abort(MPI_COMM_WORLD, 1);
+	abort();
+}
+
+#ifdef PFC_DCU
+// glibc rand/srand use this same 128-byte generator; HIP must not consume its state.
+static struct random_data physical_rng;
+static int32_t physical_rng_state[32];
+static int physical_rand(void) {
+	int32_t value;
+	if(random_r(&physical_rng, &value)) fail("Physical RNG sampling");
+	return value;
+}
+static void physical_srand(unsigned int seed) {
+	if(srandom_r(seed, &physical_rng)) fail("Physical RNG seed");
+}
+#define rand physical_rand
+#define srand physical_srand
+#endif
+
+static const char *basename_of(const char *path) {
+	const char *slash = strrchr(path, '/');
+	return slash ? slash+1 : path;
+}
+
+static void safe_prefix(char *result, const char *path) {
+	if(strlen(path) >= PFC_PATH || !*basename_of(path)) fail("Invalid output prefix");
+	strcpy(result, path);
+	char *p = result+(basename_of(path)-path);
+	for(; *p; p++) {
+		unsigned char c = (unsigned char)*p;
+		if(!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+		     (c >= '0' && c <= '9') || c == '_' || c == '-')) *p = '_';
+	}
+}
+
+static void make_path(char *result, const char *prefix, const char *suffix) {
+	if(snprintf(result, PFC_PATH, "%s%s", prefix, suffix) >= PFC_PATH) fail("Path too long");
+}
+
+// Only the documented old spelling may fall back, in the same directory.
+static FILE *open_restart(const char *filename) {
+	FILE *file = fopen(filename, "r");
+	if(file || errno != ENOENT) return file;
+	const char *base = basename_of(filename);
+	const char *marker = NULL;
+	for(const char *p = base; (p = strstr(p, "-t-")); p++) marker = p;
+	if(!marker || marker == base) return NULL;
+	const char *digits = marker+3, *end = digits;
+	while(*end >= '0' && *end <= '9') end++;
+	if(end == digits || strcmp(end, ".dat")) return NULL;
+	while(digits+1 < end && *digits == '0') digits++;
+	char prefix[PFC_PATH], safe[PFC_PATH], mapped[PFC_PATH];
+	size_t length = (size_t)(marker-filename);
+	if(length >= sizeof(prefix)) fail("Restart path too long");
+	memcpy(prefix, filename, length);
+	prefix[length] = '\0';
+	safe_prefix(safe, prefix);
+	if(snprintf(mapped, sizeof(mapped), "%s-%s", safe, digits) >= (int)sizeof(mapped)) fail("Restart path too long");
+	file = fopen(mapped, "r");
+	if(file) {
+		int rank;
+		MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+		if(!rank) printf("PFC_RESTART requested=%s actual=%s\n", filename, mapped);
+	}
+	return file;
+}
+
+static void reserve_output(const char *prefix, int rank) {
+	if(rank == 0) {
+		char directory[PFC_PATH], filename[PFC_PATH];
+		const char *base = basename_of(prefix);
+		size_t directory_length = (size_t)(base-prefix);
+		if(directory_length) {
+			memcpy(directory, prefix, directory_length);
+			directory[directory_length] = '\0';
+		} else strcpy(directory, ".");
+		DIR *dir = opendir(directory);
+		if(!dir) fail(directory);
+		struct dirent *entry;
+		while((entry = readdir(dir))) {
+			if(strncmp(entry->d_name, base, strlen(base)) || entry->d_name[strlen(base)] != '-') continue;
+			const char *p = entry->d_name+strlen(base)+1, *start = p;
+			while(*p >= '0' && *p <= '9') p++;
+			if(p != start && !strcmp(p, ".dat")) fail("Output data already exists for this prefix");
+		}
+		if(closedir(dir)) fail(directory);
+		make_path(filename, prefix, ".out");
+		FILE *file = fopen(filename, "wx");
+		if(!file) fail(filename);
+		if(fclose(file)) fail(filename);
+	}
+	MPI_Barrier(MPI_COMM_WORLD);
+}
 
 // contains stuff related to output
 struct Output {
-	char name[128];		// run name
+	char name[PFC_PATH];	// safe output prefix; input path stays unchanged
 	int T_print;		// interval for printing output
 	int T_write;		// interval for saving state
+	int *written_steps;
+	size_t written_count;
 };
 
 // contains stuff related to data arrays
@@ -37,6 +146,9 @@ struct Arrays {
 	fftw_plan p_P;	// FFTW plan for F(p)
 	fftw_plan q_Q;	// F(q)
 	fftw_plan Q_q;	// F^-1(Q)
+#ifdef PFC_DCU
+	PfcDcu *dcu;
+#endif
 };
 
 // contains model parameters
@@ -62,6 +174,7 @@ struct Relaxation {
 	double dy;			// y-
 	double dt;			// time step
 	int T_optimize;		// interval for calculation box optimization
+	int block;
 };
 
 // seeds processes' random number generators
@@ -70,7 +183,7 @@ void seed_rngs(struct Relaxation *relaxation, FILE *input) {
 	// seed for 0th process from input file
 	if(fscanf(input, " %d", &seed) != 1) {
 		printf("Invalid input for random number generator seed!\n");
-		exit(1);
+		fail("Invalid solver input or restart data");
 	}
 	if(relaxation->id == 0) {
 		if(seed == 0) srand(time(NULL));	// random seed
@@ -87,32 +200,41 @@ void seed_rngs(struct Relaxation *relaxation, FILE *input) {
 
 // configures arrays and FFTW plans
 void configure_arrays(struct Arrays *arrays, FILE *input) {
-	if(fscanf(input, " %d %d", &arrays->W, &arrays->H) != 2) {
+	if(fscanf(input, " %d %d", &arrays->W, &arrays->H) != 2 || arrays->W <= 0 || arrays->W > INT_MAX-2 || arrays->H <= 0) {
 		printf("Invalid input for array dimensions!\n");
-		exit(1);
+		fail("Invalid solver input or restart data");
 	}
 
-	int lWHh = fftw_mpi_local_size_2d_transposed(arrays->H, arrays->W/2+1, MPI_COMM_WORLD, &arrays->lH, &arrays->lh0, &arrays->lW, &arrays->lw0);		// local data size halved
-	int lWHp = 2*lWHh;	// local data size padded
+	ptrdiff_t lWHh = fftw_mpi_local_size_2d_transposed(arrays->H, arrays->W/2+1, MPI_COMM_WORLD, &arrays->lH, &arrays->lh0, &arrays->lW, &arrays->lw0);
+	if(lWHh < 0 || lWHh > PTRDIFF_MAX/2) fail("Invalid FFTW allocation size");
+	ptrdiff_t lWHp = 2*lWHh;	// preserve FFTW's allocation capacity and slab boundaries
+	if(lWHh == 0) lWHh = 1, lWHp = 2;
+	if((size_t)lWHp > SIZE_MAX/sizeof(double)) fail("Host allocation byte size overflow");
 
 	arrays->A = (double*)fftw_malloc(lWHh*sizeof(double));	// allocate arrays
 	arrays->B = (double*)fftw_malloc(lWHh*sizeof(double));
 	
 	arrays->p = (double*)fftw_malloc(lWHp*sizeof(double));
 	arrays->q = (double*)fftw_malloc(lWHp*sizeof(double));
-	
-	arrays->p_P = fftw_mpi_plan_dft_r2c_2d(arrays->H, arrays->W, arrays->p, (fftw_complex*)arrays->p, MPI_COMM_WORLD, FFTW_MEASURE|FFTW_MPI_TRANSPOSED_OUT);	// set up FFTW plans
+	if(!arrays->A || !arrays->B || !arrays->p || !arrays->q) fail("Host array allocation");
+	memset(arrays->p, 0, lWHp*sizeof(double));
+	memset(arrays->q, 0, lWHp*sizeof(double));
+#ifdef PFC_DCU
+	arrays->dcu = pfc_dcu_create(arrays->W, arrays->H, arrays->lH, arrays->lh0, arrays->lW, arrays->lw0, MPI_COMM_WORLD);
+#else
+	arrays->p_P = fftw_mpi_plan_dft_r2c_2d(arrays->H, arrays->W, arrays->p, (fftw_complex*)arrays->p, MPI_COMM_WORLD, FFTW_MEASURE|FFTW_MPI_TRANSPOSED_OUT);
 	arrays->q_Q = fftw_mpi_plan_dft_r2c_2d(arrays->H, arrays->W, arrays->q, (fftw_complex*)arrays->q, MPI_COMM_WORLD, FFTW_MEASURE|FFTW_MPI_TRANSPOSED_OUT);
 	arrays->Q_q = fftw_mpi_plan_dft_c2r_2d(arrays->H, arrays->W, (fftw_complex*)arrays->q, arrays->q, MPI_COMM_WORLD, FFTW_MEASURE|FFTW_MPI_TRANSPOSED_IN);
-	
+	if(!arrays->p_P || !arrays->q_Q || !arrays->Q_q) fail("FFTW planning");
+#endif
 }
 
 // configures output
 void configure_output(struct Output *output, FILE *input) {
 	// read intervals for printing and saving from input file
-	if(fscanf(input, " %d %d", &output->T_print, &output->T_write) != 2) {
+	if(fscanf(input, " %d %d", &output->T_print, &output->T_write) != 2 || output->T_print <= 0 || output->T_write <= 0) {
 		printf("Invalid input for output configuration!\n");
-		exit(1);
+		fail("Invalid solver input or restart data");
 	}
 }
 
@@ -121,16 +243,21 @@ void configure_model(struct Model *model, FILE *input) {
 	// read model parameters from input file
 	if(fscanf(input, " %lf %lf %lf %lf %lf", &model->alpha, &model->beta, &model->gamma, &model->delta, &model->c) != 5) {
 		printf("Invalid input for model parameters!\n");
-		exit(1);
+		fail("Invalid solver input or restart data");
 	}
+	if(!isfinite(model->alpha) || !isfinite(model->beta) || !isfinite(model->gamma) ||
+	   !isfinite(model->delta) || !isfinite(model->c)) fail("Non-finite model parameter");
 }
 
 // configures relaxation
 void configure_relaxation(struct Relaxation *relaxation, FILE *input) {
 	// read from input file
-	if(fscanf(input, " %d %lf %lf %lf %d", &relaxation->T, &relaxation->dx, &relaxation->dy, &relaxation->dt, &relaxation->T_optimize) != 5) {
+	if(fscanf(input, " %d %lf %lf %lf %d", &relaxation->T, &relaxation->dx, &relaxation->dy, &relaxation->dt, &relaxation->T_optimize) != 5 ||
+	   relaxation->T < 0 || relaxation->T_optimize < 0 ||
+	   !isfinite(relaxation->dx) || !isfinite(relaxation->dy) || !isfinite(relaxation->dt) ||
+	   relaxation->dx <= 0 || relaxation->dy <= 0 || relaxation->dt <= 0) {
 		printf("Invalid input for relaxation settings!\n");
-		exit(1);
+		fail("Invalid solver input or restart data");
 	}
 }
 
@@ -222,34 +349,126 @@ void polycrystalline_state(struct Arrays *arrays, double dx, double dy, double l
 void read_state(struct Arrays *arrays, FILE *file, double p, double A) {
 	int Wp = 2*(arrays->W/2+1);
 	int w, h, k;
-	double dummy;
 	double p0 = 0.0;
 	double Amin = 1.0e100;
 	double Amax = -1.0e100;
-	for(h = 0; h < arrays->H; h++) {
-		// data corresponds to local chunk?
-		if(h >= arrays->lh0 && h < arrays->lh0+arrays->lH) {
-			k = Wp*(h-arrays->lh0);
-			for(w = 0; w < arrays->W; w++) {
-				if(fscanf(file, "%lf", &arrays->q[k+w]) != 1) {
-					printf("Invalid data for initialization!\n");
-					exit(3);
-				}
-				p0 += arrays->q[k+w];
-				if(arrays->q[k+w] < Amin) Amin = arrays->q[k+w];
-				if(arrays->q[k+w] > Amax) Amax = arrays->q[k+w];
-			}
+	int rank, ranks;
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	MPI_Comm_size(MPI_COMM_WORLD, &ranks);
+	size_t local_count = (size_t)arrays->W*arrays->lH;
+	if(local_count > INT_MAX) fail("Restart slab exceeds MPI count range");
+	long long local[] = {(long long)arrays->lH, (long long)arrays->lh0};
+	long long *slabs = rank == 0 ? malloc((size_t)2*ranks*sizeof(long long)) : NULL;
+	if(rank == 0 && !slabs) fail("Restart slab metadata allocation");
+	if(MPI_Gather(local, 2, MPI_LONG_LONG, slabs, 2, MPI_LONG_LONG, 0, MPI_COMM_WORLD) != MPI_SUCCESS)
+		fail("Restart slab metadata communication");
+	char *text = NULL;
+	size_t *starts = NULL;
+	int *lengths = NULL;
+	int parallel = 0;
+	if(rank == 0) {
+		if((size_t)arrays->W > SIZE_MAX/(size_t)arrays->H/sizeof(double)) fail("Restart field byte size overflow");
+		size_t total = (size_t)arrays->W*arrays->H;
+		for(int r = 0; r < ranks; r++) {
+			if(slabs[2*r] < 0 || slabs[2*r] > arrays->H || slabs[2*r+1] < 0 || slabs[2*r+1] > arrays->H-slabs[2*r])
+				fail("Invalid restart slab");
+			if((size_t)arrays->W*slabs[2*r] > INT_MAX) fail("Invalid restart slab extent");
 		}
-		else {
-			for(w = 0; w < arrays->W; w++) {
-				// fast-forward over other processes' chunks
-				if(fscanf(file, "%lf", &dummy) != 1) {
-					printf("Invalid data for initialization!\n");
-					exit(3);
+		if(fseek(file, 0, SEEK_END) == 0) {
+			long end = ftell(file);
+			if(end < 0 || (uintmax_t)end > SIZE_MAX-1) fail("Restart text byte size overflow");
+			size_t bytes = (size_t)end;
+			if(fseek(file, 0, SEEK_SET)) fail("Restart file rewind");
+			// shortcut: root buffers restart ASCII, or FP64 on fallback; stream if it exceeds root memory.
+			text = malloc(bytes+1);
+			starts = malloc((size_t)ranks*sizeof(size_t));
+			lengths = malloc((size_t)ranks*sizeof(int));
+			if(!text || !starts || !lengths) fail("Restart text allocation");
+			if(fread(text, 1, bytes, file) != bytes || ferror(file)) fail("Restart text read");
+			text[bytes] = '\0';
+			if(fseek(file, 0, SEEK_SET)) fail("Restart file rewind");
+			size_t cursor = 0, covered = 0;
+			parallel = 1;
+			for(int r = 0; r < ranks && parallel; r++) {
+				size_t count = (size_t)arrays->W*slabs[2*r];
+				if(count && (size_t)arrays->W*slabs[2*r+1] != covered) { parallel = 0; break; }
+				starts[r] = cursor;
+				for(size_t i = 0; i < count; i++) {
+					while(cursor < bytes && isspace((unsigned char)text[cursor])) cursor++;
+					if(cursor == bytes) { parallel = 0; break; }
+					while(cursor < bytes && !isspace((unsigned char)text[cursor])) cursor++;
 				}
+				if(cursor-starts[r] > INT_MAX) parallel = 0;
+				else lengths[r] = (int)(cursor-starts[r]);
+				covered += count;
 			}
+			if(covered != total) parallel = 0;
+		} else clearerr(file);
+	}
+	if(MPI_Bcast(&parallel, 1, MPI_INT, 0, MPI_COMM_WORLD) != MPI_SUCCESS)
+		fail("Restart parser selection communication");
+	if(parallel) {
+		int bytes;
+		if(MPI_Scatter(lengths, 1, MPI_INT, &bytes, 1, MPI_INT, 0, MPI_COMM_WORLD) != MPI_SUCCESS)
+			fail("Restart text lengths communication");
+		char *chunk = rank == 0 ? text+starts[0] : malloc((size_t)bytes+1);
+		if(!chunk) fail("Restart local text allocation");
+		if(rank == 0) {
+			for(int r = 1; r < ranks; r++)
+				if(MPI_Send(text+starts[r], lengths[r], MPI_BYTE, r, 74, MPI_COMM_WORLD) != MPI_SUCCESS)
+					fail("Restart text distribution");
+		} else if(MPI_Recv(chunk, bytes, MPI_BYTE, 0, 74, MPI_COMM_WORLD, MPI_STATUS_IGNORE) != MPI_SUCCESS)
+			fail("Restart text reception");
+		int valid = 1;
+		if(local_count) {
+			FILE *input = fmemopen(chunk, (size_t)bytes, "r");
+			if(!input) fail("Restart text stream");
+			for(size_t i = 0; i < local_count; i++)
+				if(fscanf(input, "%lf", &arrays->p[i]) != 1 || !isfinite(arrays->p[i])) { valid = 0; break; }
+			int next;
+			do { next = fgetc(input); } while(next != EOF && isspace((unsigned char)next));
+			if(next != EOF) valid = 0;
+			if(ferror(input) || fclose(input)) fail("Restart local text stream read");
+		}
+		if(rank != 0) free(chunk);
+		// scanf also accepts adjacent numbers such as 1-2; retain the original parser for those files.
+		if(MPI_Allreduce(&valid, &parallel, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD) != MPI_SUCCESS)
+			fail("Restart parser validation communication");
+	}
+	free(text);
+	free(starts);
+	free(lengths);
+	if(rank == 0) printf("PFC_RESTART_PARSE mode=%s\n", parallel ? "parallel" : "root-fallback");
+	if(!parallel && rank == 0) {
+		size_t total = (size_t)arrays->W*arrays->H;
+		double *field = malloc(total*sizeof(double));
+		if(!field) fail("Restart field allocation");
+		for(size_t i = 0; i < total; i++)
+			if(fscanf(file, "%lf", &field[i]) != 1 || !isfinite(field[i])) fail("Invalid restart density");
+		for(int r = 0; r < ranks; r++) {
+			if(slabs[2*r] < 0 || slabs[2*r+1] < 0) fail("Invalid restart slab");
+			size_t count = (size_t)arrays->W*slabs[2*r];
+			size_t offset = (size_t)arrays->W*slabs[2*r+1];
+			if(count > INT_MAX || offset > total || count > total-offset) fail("Invalid restart slab extent");
+			if(r == 0) memcpy(arrays->p, field+offset, count*sizeof(double));
+			else if(MPI_Send(field+offset, (int)count, MPI_DOUBLE, r, 73, MPI_COMM_WORLD) != MPI_SUCCESS)
+				fail("Restart slab distribution");
+		}
+		free(field);
+	} else if(!parallel && MPI_Recv(arrays->p, (int)local_count, MPI_DOUBLE, 0, 73, MPI_COMM_WORLD, MPI_STATUS_IGNORE) != MPI_SUCCESS)
+		fail("Restart slab reception");
+	free(slabs);
+	for(h = 0; h < arrays->lH; h++) {
+		k = Wp*h;
+		for(w = 0; w < arrays->W; w++) {
+			arrays->q[k+w] = arrays->p[(size_t)h*arrays->W+w];
+			p0 += arrays->q[k+w];
+			if(arrays->q[k+w] < Amin) Amin = arrays->q[k+w];
+			if(arrays->q[k+w] > Amax) Amax = arrays->q[k+w];
 		}
 	}
+	if(arrays->lH == 0) return;
+	if(!(Amax > Amin)) fail("Constant restart slab cannot be rescaled by the original algorithm");
 	p0 /= arrays->W*arrays->lH;
 	for(h = 0; h < arrays->lH; h++) {
 		k = Wp*h;
@@ -264,14 +483,15 @@ void initialize_system(struct Arrays *arrays, FILE *input) {
 	int init;
 	if(fscanf(input, " %d", &init) != 1) {
 		printf("Invalid initialization type!\n");
-		exit(1);
+		fail("Invalid solver input or restart data");
 	}
 	if(init == 0) {	// random initialization
 		double p, A;
 		if(fscanf(input, " %lf %lf", &p, &A) != 2) {
 			printf("Invalid initialization parameters!\n");
-			exit(1);
+			fail("Invalid solver input or restart data");
 		}
+		if(!isfinite(p) || !isfinite(A)) fail("Non-finite initial density parameter");
 		random_state(arrays, p, A);
 	}
 	else if(init == 1) {	// polycrystalline initialization
@@ -279,47 +499,75 @@ void initialize_system(struct Arrays *arrays, FILE *input) {
 		double dx, dy, l0, p, A, R;
 		if(fscanf(input, " %lf %lf %lf %lf %lf %d %lf", &dx, &dy, &l0, &p, &A, &N, &R) != 7) {
 			printf("Invalid initialization parameters!\n");
-			exit(1);
+			fail("Invalid solver input or restart data");
 		}
+		if(N <= 0 || N > INT_MAX/3 || R <= 0 || l0 <= 0 || dx <= 0 || dy <= 0 ||
+		   !isfinite(p) || !isfinite(A) || !isfinite(R) || !isfinite(l0) || !isfinite(dx) || !isfinite(dy))
+			fail("Invalid crystallite parameters");
 		polycrystalline_state(arrays, dx, dy, l0, p, A, N, R);
 	}
 	else if(init == 2) {			// initial state read from a data file
-		char filename[128];
+		char filename[PFC_PATH];
 		double p, A;
-		if(fscanf(input, " %s %lf %lf", filename, &p, &A) != 3) {
+		if(fscanf(input, " %4095s %lf %lf", filename, &p, &A) != 3) {
 			printf("Invalid initialization parameters!\n");
-			exit(1);
+			fail("Invalid solver input or restart data");
 		}
-		FILE *file = fopen(filename, "r");
+		if(!isfinite(p) || !isfinite(A)) fail("Non-finite restart parameter");
+		FILE *file = open_restart(filename);
 		if(file == NULL) {
 			printf("Data file not found!\n");
-			exit(2);
+			fail("Invalid solver input or restart data");
 		}
 		read_state(arrays, file, p, A);
+		if(fclose(file)) fail(filename);
 	}
+	else fail("Unknown initialization type");
+#ifdef PFC_DCU
+	pfc_dcu_upload(arrays->dcu, arrays->q);
+#endif
 }
 
 // saves state into a file
 void write_state(struct Arrays *arrays, struct Relaxation *relaxation, struct Output *output) {
-	char filename[128];			// filename
-	sprintf(filename, "%s-t-%d.dat", output->name, relaxation->t);
-	FILE *file;					// file stream
+	char filename[PFC_PATH], suffix[64];
+	snprintf(suffix, sizeof(suffix), "-%d.dat", relaxation->t);
+	make_path(filename, output->name, suffix);
+#ifdef PFC_DCU
+	pfc_dcu_download(arrays->dcu, arrays->q);
+#endif
+	int owned = 0;
+	for(size_t j = 0; j < output->written_count; j++) if(output->written_steps[j] == relaxation->t) owned = 1;
+	if(!owned) {
+		int *steps = realloc(output->written_steps, (output->written_count+1)*sizeof(int));
+		if(!steps) fail("Output ownership allocation");
+		output->written_steps = steps;
+		output->written_steps[output->written_count++] = relaxation->t;
+	}
+	if((size_t)arrays->lH > SIZE_MAX/(size_t)arrays->W) fail("Output sample count overflow");
+	size_t samples = (size_t)arrays->lH*arrays->W;
+	if(samples > (SIZE_MAX-1)/32) fail("Output formatting size overflow");
+	size_t capacity = 32*samples+1, used = 0;
+	char *text = malloc(capacity);
+	if(!text) fail("Output formatting allocation");
 	int Wp = 2*(arrays->W/2+1);
-	int i, w, h, k;
-	for(i = 0; i < relaxation->ID; i++) {	// go through ranks
-		MPI_Barrier(MPI_COMM_WORLD);		// makes every process wait until previous has completed writing output
-		if(relaxation->id == i) {			// ith process continues, others go back waiting
-			if(relaxation->id == 0) file = fopen(filename, "w");	// 0th process overwrites possible previous data
-			else file = fopen(filename, "a");						// others append to end
-			for(h = 0; h < arrays->lH; h++) {
-				k = Wp*h;
-				for(w = 0; w < arrays->W; w++) {
-					fprintf(file, "%e\n", arrays->q[k+w]);
-				}
-			}
-			fclose(file);		// close file stream
+	// Format the same %e values in parallel, then retain the original rank write order.
+	for(ptrdiff_t h = 0; h < arrays->lH; h++) {
+		for(int w = 0; w < arrays->W; w++) {
+			int length = snprintf(text+used, capacity-used, "%e\n", arrays->q[Wp*h+w]);
+			if(length < 0 || (size_t)length >= capacity-used) fail("Output formatting failed");
+			used += length;
 		}
 	}
+	for(int i = 0; i < relaxation->ID; i++) {
+		if(MPI_Barrier(MPI_COMM_WORLD) != MPI_SUCCESS) fail("Output MPI_Barrier");
+		if(relaxation->id == i) {
+			FILE *file = fopen(filename, i == 0 ? (owned ? "w" : "wx") : "a");
+			if(!file) fail(filename);
+			if(fwrite(text, 1, used, file) != used || ferror(file) || fclose(file)) fail(filename);
+		}
+	}
+	free(text);
 }
 
 // prints output, format:
@@ -327,12 +575,13 @@ void write_state(struct Arrays *arrays, struct Relaxation *relaxation, struct Ou
 void print(struct Relaxation *relaxation, struct Output *output) {
 	if(relaxation->id == 0) {			// only 0th process
 		printf("%d %d %.9lf %.9lf %.9lf %.9lf\n", relaxation->t, (int)(time(NULL)-relaxation->t0), relaxation->dx, relaxation->dy, relaxation->f, relaxation->p);
-		char filename[128];
-		sprintf(filename, "%s.out", output->name);
+		char filename[PFC_PATH];
+		make_path(filename, output->name, ".out");
 		FILE *file;
 		file = fopen(filename, "a");	// need only append, empty file was already generated
+		if(!file) fail(filename);
 		fprintf(file, "%d %d %.9lf %.9lf %.9lf %.9lf\n", relaxation->t, (int)(time(NULL)-relaxation->t0), relaxation->dx, relaxation->dy, relaxation->f, relaxation->p);
-		fclose(file);
+		if(ferror(file) || fclose(file)) fail(filename);
 	}
 }
 
@@ -364,6 +613,9 @@ void update_AB(struct Arrays *arrays, struct Model *model, struct Relaxation *re
 			arrays->B[k+h] *= divWH;					// descaling
 		}
 	}
+#ifdef PFC_DCU
+	pfc_dcu_upload_ab(arrays->dcu, arrays->A, arrays->B);
+#endif
 }
 
 // scales p arrays (in k-space) by 1/(W*H) ((I)FFTs cause scaling of data by sqrt(W*H))
@@ -389,6 +641,10 @@ void scale_Q(struct Arrays *arrays) {
 // computes average free energy density (f) and average density (p) (f & p -> fp)
 void fp(struct Arrays *arrays, struct Model *model, struct Relaxation *relaxation) {
 	int Wp = 2*(arrays->W/2+1);
+	int w, h, k;
+#ifdef PFC_DCU
+	pfc_dcu_diagnostic(arrays->dcu, arrays->p, arrays->q, relaxation->dx, relaxation->dy);
+#else
 	double dkx = 2.0*pi/(relaxation->dx*arrays->W);
 	double dky = 2.0*pi/(relaxation->dy*arrays->H);
 	memcpy(arrays->p, arrays->q, Wp*arrays->lH*sizeof(double));		// save current state to p array
@@ -396,7 +652,7 @@ void fp(struct Arrays *arrays, struct Model *model, struct Relaxation *relaxatio
 	scale_Q(arrays);
 	double kx2, ky, k2, d2;
 	fftw_complex *Q = (fftw_complex*)&arrays->q[0];
-	int w, h, gw, k;
+	int gw;
 	for(w = 0; w < arrays->lW; w++) {
 		gw = arrays->lw0+w;
 		kx2 = gw*dkx;
@@ -412,6 +668,7 @@ void fp(struct Arrays *arrays, struct Model *model, struct Relaxation *relaxatio
 		}
 	}
 	fftw_execute(arrays->Q_q);
+#endif
 	relaxation->f = 0.0;		// reset variables for average (free energy) density
 	relaxation->p = 0.0;
 	double div3 = 1.0/3.0;
@@ -440,12 +697,17 @@ void fp(struct Arrays *arrays, struct Model *model, struct Relaxation *relaxatio
 	double divWH = 1.0/arrays->W/arrays->H;
 	relaxation->f *= divWH;
 	relaxation->p *= divWH;
+#ifndef PFC_DCU
 	fftw_execute(arrays->p_P);
 	scale_P(arrays);
+#endif
 }
 
 // performs one iteration of the semi-implicit spectral method
 void step(struct Arrays *arrays, struct Model *model, struct Relaxation *relaxation) {
+#ifdef PFC_DCU
+	pfc_dcu_step(arrays->dcu, relaxation->t, model->gamma, model->delta);
+#else
 	int w, h, k;
 	int Wp = 2*(arrays->W/2+1);
 	if(relaxation->t%100 == 0) {	// avoids numerical instability (I guess there's some accumulating numerical error, don't know really...)
@@ -477,6 +739,7 @@ void step(struct Arrays *arrays, struct Model *model, struct Relaxation *relaxat
 		}
 	}
 	fftw_execute(arrays->Q_q);
+#endif
 }
 
 // optimizes calculation box size for system
@@ -520,19 +783,66 @@ void optimize(struct Arrays *arrays, struct Model *model, struct Relaxation *rel
 
 // relaxes the system for T time steps
 void relax(struct Arrays *arrays, struct Model *model, struct Relaxation *relaxation, struct Output *output) {
+	size_t count = (size_t)relaxation->T+1;
+	if(count > 715827882) fail("Too many steps for buffered MPI timing");
+	double *timing = calloc(3*count, sizeof(double));
+	if(!timing) fail("Step timing allocation");
+	double *elapsed = timing, *cumulative = timing+count, *optimization = timing+2*count;
+	double block_start = MPI_Wtime();
+	const char *phase = basename_of(output->name);
+	int timed_rank = 1;
+#ifdef PFC_DCU
+	timed_rank = pfc_dcu_is_leader(arrays->dcu);
+#endif
 	for(relaxation->t = 0; relaxation->t <= relaxation->T; relaxation->t++) {
-		if(relaxation->T_optimize > 0 && relaxation->t > 0 && relaxation->t%relaxation->T_optimize == 0) optimize(arrays, model, relaxation);	// optimize?
+		if(relaxation->T_optimize > 0 && relaxation->t > 0 && relaxation->t%relaxation->T_optimize == 0) {
+			double start = MPI_Wtime();
+			optimize(arrays, model, relaxation);
+#ifdef PFC_DCU
+			pfc_dcu_sync(arrays->dcu);
+#endif
+			if(timed_rank) optimization[relaxation->t] = MPI_Wtime()-start;
+		}
 		if(relaxation->t%output->T_print == 0) {	// print output?
 			fp(arrays, model, relaxation);
 			print(relaxation, output);
 		}
 		if(relaxation->t%output->T_write == 0) write_state(arrays, relaxation, output);		// write out state?
-		if(relaxation->t < relaxation->T) step(arrays, model, relaxation);	// perform iteration step
+		if(relaxation->t < relaxation->T) {
+			double start = MPI_Wtime();
+			step(arrays, model, relaxation);
+#ifdef PFC_DCU
+			pfc_dcu_sync(arrays->dcu);
+#endif
+			if(timed_rank) {
+				elapsed[relaxation->t] = MPI_Wtime()-start;
+				cumulative[relaxation->t] = MPI_Wtime()-block_start;
+			}
+		}
 	}
+	// One block reduction observes every completed step without changing step communication.
+	MPI_Allreduce(MPI_IN_PLACE, timing, (int)(3*count), MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+	if(relaxation->id == 0) {
+		for(int t = 0; t <= relaxation->T; t++) {
+			if(relaxation->T_optimize > 0 && t > 0 && t%relaxation->T_optimize == 0)
+				printf("PFC_TIMING kind=optimize phase=%s block=%d step=%d seconds=%.9f\n", phase, relaxation->block, t, optimization[t]);
+			if(t < relaxation->T)
+				printf("PFC_TIMING kind=step phase=%s block=%d step=%d seconds=%.9f cumulative_seconds=%.9f\n", phase, relaxation->block, t+1, elapsed[t], cumulative[t]);
+		}
+		fflush(stdout);
+	}
+	free(timing);
 }
 
 // frees allocated arrays
 void clear_arrays(struct Arrays *arrays) {
+#ifdef PFC_DCU
+	if(arrays->dcu) pfc_dcu_destroy(arrays->dcu);
+#else
+	if(arrays->p_P) fftw_destroy_plan(arrays->p_P);
+	if(arrays->q_Q) fftw_destroy_plan(arrays->q_Q);
+	if(arrays->Q_q) fftw_destroy_plan(arrays->Q_q);
+#endif
 	fftw_free(arrays->p);
 	fftw_free(arrays->q);
 	fftw_free(arrays->A);
@@ -542,33 +852,36 @@ void clear_arrays(struct Arrays *arrays) {
 int main(int argc, char **argv) {
 	// init MPI
 	MPI_Init(&argc, &argv);
+	double invocation_start = MPI_Wtime();
 	fftw_mpi_init();
+#ifdef PFC_DCU
+	if(initstate_r(1, (char*)physical_rng_state, sizeof(physical_rng_state), &physical_rng))
+		fail("Physical RNG state initialization");
+#endif
 	// create structs
-	struct Arrays arrays;
-	struct Model model;
-	struct Relaxation relaxation;
-	struct Output output;
+	struct Arrays arrays = {0};
+	struct Model model = {0};
+	struct Relaxation relaxation = {0};
+	struct Output output = {0};
 	relaxation.t0 = time(NULL);
 	relaxation.t = 0;
 	relaxation.d = 0.0001;
 	MPI_Comm_rank(MPI_COMM_WORLD, &relaxation.id);
 	MPI_Comm_size(MPI_COMM_WORLD, &relaxation.ID);
-	strcpy(output.name, argv[1]);
+	if(argc != 2) fail("Usage: polygrpfc INPUT_PREFIX");
+	safe_prefix(output.name, argv[1]);
 	// input stream
-	char filename[128];
-	sprintf(filename, "%s.in", output.name);
+	char filename[PFC_PATH];
+	make_path(filename, argv[1], ".in");
 	FILE *input = fopen(filename, "r");
-	if(input == NULL) {
-		printf("Input file not found!\n");
-		return 2;
-	}
-	// create empty output file
-	sprintf(filename, "%s.out", output.name);
-	FILE *out = fopen(filename, "w");
-	fclose(out);
+	if(input == NULL) fail(filename);
+	reserve_output(output.name, relaxation.id);
+	if(relaxation.id == 0 && strcmp(output.name, argv[1]))
+		printf("PFC_PREFIX requested=%s actual=%s\n", argv[1], output.name);
 	// read input
 	char label;
 	char line[1024];
+	int initialized = 0, model_configured = 0;
 	while(fscanf(input, " %c", &label) != EOF) {
 		if(label == '#' && fgets(line, 1024, input)) {}			// comment
 		else if(label == '\n') {}								// empty line
@@ -579,27 +892,49 @@ int main(int argc, char **argv) {
 			configure_output(&output, input);
 		}
 		else if(label == 'A') {									// set up arrays and FFTW plans
+			if(arrays.q) { clear_arrays(&arrays); memset(&arrays, 0, sizeof(arrays)); }
 			configure_arrays(&arrays, input);
+			initialized = 0;
 		}
 		else if(label == 'I') {									// initialization
+			if(!arrays.q) fail("Arrays must precede initialization");
 			initialize_system(&arrays, input);
+			initialized = 1;
 		}
 		else if(label == 'M') {									// model
 			configure_model(&model, input);
+			model_configured = 1;
 		}
 		else if(label == 'R') {									// relaxation
+			if(!initialized || !model_configured || output.T_print <= 0 || output.T_write <= 0)
+				fail("Relaxation needs initialized arrays, model and output intervals");
 			configure_relaxation(&relaxation, input);
 			update_AB(&arrays, &model, &relaxation);
+			if(relaxation.block++ == 0) {
+#ifdef PFC_DCU
+				pfc_dcu_sync(arrays.dcu);
+#endif
+				double initialization = MPI_Wtime()-invocation_start;
+				MPI_Allreduce(MPI_IN_PLACE, &initialization, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+				if(relaxation.id == 0) printf("PFC_TIMING kind=init phase=%s seconds=%.9f\n", basename_of(output.name), initialization);
+			}
 			relax(&arrays, &model, &relaxation, &output);
 		}
 		else {
 			printf("Invalid label: %c!\n", label);				// bad input
-			return 1;
+			fail("Invalid input label");
 		}
 	}
-	fclose(input);
+	if(ferror(input) || fclose(input)) fail(filename);
 	
 	clear_arrays(&arrays);										// clean-up
+	free(output.written_steps);
+	double total = MPI_Wtime()-invocation_start;
+	MPI_Allreduce(MPI_IN_PLACE, &total, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+	if(relaxation.id == 0) {
+		printf("PFC_TIMING kind=total phase=%s seconds=%.9f\n", basename_of(output.name), total);
+		fflush(stdout);
+	}
 	MPI_Finalize();
 
 	return 0;

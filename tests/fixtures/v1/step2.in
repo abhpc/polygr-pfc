@@ -1,0 +1,7 @@
+# Keep the original restart spelling to exercise exact-path-first fallback.
+S 34789847
+O 64 128
+A 256 256
+I 2 step1-t-128.dat -0.072 0.1
+M -0.15 1.0 0.87 1.0 0
+R 128 0.7 0.7 1.0 100

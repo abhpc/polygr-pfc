@@ -1,0 +1,8 @@
+# Keep the original restart spelling for the same two-stage input on CPU/DCU.
+# User-requested 100 nm square under the unchanged 0.7/0.7/7.3/2.46 conversion.
+S 34789847
+O 1000 2000
+A 4240 4240
+I 2 step1-t-2000.dat -0.072 0.1
+M -0.15 1.0 0.87 1.0 0
+R 2000 0.7 0.7 1.0 100

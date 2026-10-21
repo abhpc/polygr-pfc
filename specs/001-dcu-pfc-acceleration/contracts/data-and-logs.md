@@ -82,8 +82,8 @@ PFC_TIMING kind=total phase=step1 seconds=1.234567890
 跨rank相加充当总耗时，也不能把ready_download解释为纯DMA时间。验收仍只使用外部完整PFC计时。
 
 证据记录须关联原 CPU 提交、输入与初始场、种子、真实 MPI/slab 分解、CPU/DCU 资源、
-模块/库/编译选项、Slurm Job ID、实际 `SLURM_JOB_PARTITION`、退出状态、日志、误差和外部两阶段时间。
-所有项目作业必须在脚本头部声明 `#SBATCH --partition=Debug`，不得使用分区回退。
+模块/库/编译选项、可选调度作业身份、受管集群的实际 `SLURM_JOB_PARTITION`、退出状态、日志、误差和外部两阶段时间。
+本会话代理的受管集群作业必须在脚本头部声明 `#SBATCH --partition=Debug`，不得使用分区回退。公共用户可按README直接编译运行，Slurm/Debug不是公共使用前提。
 日常 `.slm` 不包含测试、探针、证据/元数据生成或外层计时；这些约束不改变求解器逐步计时。
 只有规格冻结的 V1/V2/V3；两阶段末态按冻结容差通过后，才能报告 `T_CPU/T_4DCU >= 5`。
 失败、未运行或资料不完整的项目保持未验证，不以日志格式正确替代数值或性能通过。

@@ -1,134 +1,201 @@
 # DCU 加速的多晶石墨烯 PFC 程序
 
-本项目用相场晶体方法（PFC）生成多晶石墨烯，再转换为 LAMMPS 可读取的原子初始构型。程序基于 [Petri Hirvonen 的 PFC 工具](https://github.com/petenez/pfc)，保留原物理方程、离散算法和双精度计算。
+本项目用相场晶体方法（PFC）生成多晶石墨烯，并转换为 LAMMPS 可读取的原子初始构型。程序基于 [Petri Hirvonen 的 PFC 工具](https://github.com/petenez/pfc)，保留原物理方程、离散算法和双精度计算。
 
 计算分为两个阶段：`step1` 生成并生长晶粒，`step2` 读取第一阶段末态进行结构弛豫。DCU 负责 FFT 和场更新；原子转换沿用 Java Coordinator 和 OVITO，灰度图片由 Python 导出。
 
-编译、测试、计算及后处理均通过 Slurm 作业执行，分区固定为 `Debug`。登录节点用于传文件、编辑、加载环境和提交作业。公开文件不记录个人账户、SSH 地址或个人安装路径；本地集群配置与运行记录放在被 Git 忽略的 `yhmsr/` 中。
+编译与运行示例使用 Linux、Intel MPI 和单节点 4 张 DCU。使用资源调度系统时，按所在站点的规则申请计算资源。Slurm 部署示例见 [Host.md](Host.md)。
 
-## 1. 准备集群环境
+## 1. 获取源码并设置环境
 
-将仓库放到计算节点可访问的共享存储中，进入仓库根目录：
-
-```bash
-cd /path/to/polygr-pfc
-module av
-```
-
-需要 MPI、GCC、DTK/HIP、hipFFT 和 MPI 版 FFTW。后处理还需要 Java、OVITO 2.9.0，以及安装了 NumPy 和 Pillow 的 Python。
-
-仓库中的 modulefile 使用以下模块名作为部署示例：
-
-```text
-gcc/13.1.0
-mpi/2021.9.0
-dtk/26.04
-```
-
-先用 `module av` 查询本站环境，再修改 `slurm/modulefiles/pfc/2026.1` 中的模块名。该构建使用 Intel MPI；`I_MPI_ROOT`、`DTKROOT` 和 `HIP_PATH` 由工具链模块提供。`slurm/polygr.slm` 和 `slurm/convert.sh` 中的 Python、Java、OVITO 模块名也需要与本站一致。
-
-随后注册并加载 PFC 模块：
+需要 GCC、GNU Make、Intel MPI、DTK/HIP 和 hipFFT。后处理需要 Java 13、OVITO 2.9.0，以及 Python 3.11、NumPy 和 Pillow。已验证的工具链为 GCC 13.1.0、Intel MPI 2021.9.0、DTK 26.04，设备为 `gfx906`。
 
 ```bash
-module use "$PWD/slurm/modulefiles"
-module load pfc/2026.1
-mkdir -p "$PFC_ROOT/runs"
-cd "$PFC_ROOT/runs"
+git clone https://github.com/abhpc/polygr-pfc.git
+cd polygr-pfc
+export PFC_ROOT="$PWD"
+export FFTW_PREFIX="$PFC_ROOT/.local/fftw-3.3.10"
 ```
 
-模块从自身在仓库中的位置确定 `PFC_ROOT`，设置程序和 FFTW 库的搜索路径。无需写入个人绝对路径；模块加载本身不进行计算。新登录会话需重新执行 `module use` 和 `module load`。更多部署说明见 [Host.md](Host.md)。
-
-## 2. 首次安装 FFTW
-
-已有兼容的 MPI 版 FFTW 时，可以修改 modulefile 中的 `FFTW_PREFIX` 及库路径并跳过本步。默认安装位置为 `$PFC_ROOT/.local/fftw-3.3.10/`。
-
-先准备官方源码包；下载和传文件可以在登录节点完成：
+先加载或初始化已安装的编译器、MPI 和 DTK。没有使用环境模块时，按实际安装位置设置下面的路径；`/path/to/...` 需要替换：
 
 ```bash
-mkdir -p "$PFC_ROOT/.local/sources"
+export I_MPI_ROOT=/path/to/intel/mpi
+export DTKROOT=/path/to/dtk
+export HIP_PATH="$DTKROOT/hip"
+export PATH="$I_MPI_ROOT/bin:$HIP_PATH/bin:$DTKROOT/bin:$PATH"
+export LD_LIBRARY_PATH="$FFTW_PREFIX/lib:$I_MPI_ROOT/lib/release:$DTKROOT/lib:$HIP_PATH/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+```
+
+Makefile 使用 Intel MPI 的 `include` 和 `lib/release` 布局。其他安装布局需对应修改 `MPI_FLAGS`；更换 MPI 实现时，FFTW 和最终程序必须使用同一 MPI ABI。`PFC_GPU_ARCH` 应与实际 DCU 型号一致。
+
+## 2. 编译并安装 FFTW
+
+已有兼容的 MPI 版 FFTW 时，将 `FFTW_PREFIX` 指向该安装目录，并更新 `LD_LIBRARY_PATH`，即可跳过本步。
+
+```bash
+mkdir -p "$PFC_ROOT/.local/sources" "$PFC_ROOT/.build"
 curl --fail --location https://www.fftw.org/fftw-3.3.10.tar.gz \
   -o "$PFC_ROOT/.local/sources/fftw-3.3.10.tar.gz"
-sbatch "$PFC_ROOT/slurm/fftw.slm"
+tar -xzf "$PFC_ROOT/.local/sources/fftw-3.3.10.tar.gz" -C "$PFC_ROOT/.build"
+cd "$PFC_ROOT/.build/fftw-3.3.10"
+CFLAGS='-O3 -march=native -ffp-contract=off -Wall' MPICC=mpicc CC=gcc \
+  ./configure --prefix="$FFTW_PREFIX" --enable-mpi --enable-shared \
+  --enable-sse2 --enable-avx --enable-avx2
+make -j 8
+make install
+cd "$PFC_ROOT"
 ```
 
-安装作业会解压、配置、编译并安装 FFTW。目标安装目录已存在时不覆盖；已有安装直接用于后续编译。
-
-提交成功仅表示作业进入队列。用提交时返回的编号查询，确认状态为 `COMPLETED` 且 `ExitCode` 为 `0:0` 后再继续：
-
-```bash
-sacct -j JOB_ID --format=JobID,State,Elapsed,ExitCode
-```
+上述 SIMD 选项对应已验证的 x86_64 CPU。其他 CPU 架构需按硬件调整 FFTW 配置。
 
 ## 3. 编译 PFC
 
-在集群提交：
-
 ```bash
-sbatch "$PFC_ROOT/slurm/build.slm"
+cd "$PFC_ROOT"
+export PFC_GPU_ARCH=gfx906
+make -j 8 bin/polygrpfc
 ```
 
-脚本执行 `make bin/polygrpfc`，生成 `$PFC_ROOT/bin/polygrpfc`。默认目标设备为 `gfx906`，其他 DCU 型号需修改 `build.slm` 中的 `PFC_GPU_ARCH`。
+生成的程序为 `bin/polygrpfc`。主机代码使用 `-O3 -march=native -ffp-contract=off -Wall`，设备使用 FP64，不启用 fast-math 或浮点收缩。程序链接本地 `hipfft` 和 MPI 版 FFTW，不混用其他 MPI ABI 的 `hipfftMp`。
 
-主机代码使用 `-O3 -march=native -ffp-contract=off -Wall`，设备使用 FP64，不启用 fast-math 或浮点收缩。FFT 链接本地 `hipfft` 和 MPI 版 FFTW；不要混用不同 MPI ABI 的库。确认编译作业完成后再提交计算。
-
-## 4. 提交两阶段计算
+需要编译原 CPU 对照程序时，执行：
 
 ```bash
-sbatch "$PFC_ROOT/slurm/polygr.slm"
+make bin/polygrpfc_cpu_ref
 ```
 
-脚本在 `runs/JobID/dcu/` 中复制并填写输入文件，然后依次运行两个阶段、转换 LAMMPS data、导出 PNG。资源在 `#SBATCH` 中指定：`Debug` 分区、单节点、32 个 MPI rank、4 张 DCU。账户和 QoS 使用集群默认值；需要显式配置时，在自己的作业副本中填写。
+该目标从固定提交 `c86efb51cf03086fb98897ab8abfe2704a62096e` 提取原始 `src/pfc.c`，生成 `bin/polygrpfc_cpu_ref`。因此需要保留包含该提交的 Git 历史。
 
-两阶段的实际求解命令为：
+## 4. 准备 100×100 nm、400 个初始晶核的输入
+
+使用新的运行目录，避免与已有结果重名。下面使用 4240² 网格、固定随机种子、每阶段 10000 步，每 1000 步保存一次：
 
 ```bash
-mpirun -bootstrap fork -np 32 -ppn 32 polygrpfc step1 > step1.stdout 2> step1.stderr
-mpirun -bootstrap fork -np 32 -ppn 32 polygrpfc step2 > step2.stdout 2> step2.stderr
+mkdir -p "$PFC_ROOT/runs"
+mkdir "$PFC_ROOT/runs/graphene-100nm-400"
+cd "$PFC_ROOT/runs/graphene-100nm-400"
+
+sed -e 's@xabc@34789847@g;s@WW@4240@g;s@HH@4240@g;s@NN@400@g;s@RR@2@g' \
+  "$PFC_ROOT/example/step1.in" > step1.in
+sed -e 's@WW@4240@g;s@HH@4240@g;s@step1-t-10000.dat@step1-10000.dat@g' \
+  "$PFC_ROOT/example/step2.in" > step2.in
 ```
 
-这些命令只能放在 Slurm 作业内执行。程序读取当前目录的 `step1.in` 和 `step2.in`，第二阶段按输入中的路径读取第一阶段末态。脚本按顺序执行，命令出错即停止，不包含额外检测、测试或外层计时命令；程序自身保留逐步计算时间日志。
+`400` 是初始晶核数，晶核半径为 2 个晶格常数；生长后保留的晶粒数可能变化。沿用原转换尺度 `0.7 0.7 7.3 2.46` 时，4240² 网格的名义尺寸约为 100.017534×100.017534 nm。
 
-当前验证使用总计 32 rank 的划分，每卡由一个执行进程聚合成员的 FFT 和场更新。初始化和局部统计依赖 rank 划分，不要仅为匹配卡数把进程数改成 4，也不要添加每 rank 独占一张卡的绑定。
-
-跨节点时，已验证的配置为两节点、每节点 16 rank 和 4 张卡，总计仍为 32 rank。相应修改 `#SBATCH --nodes=2`、`#SBATCH --ntasks-per-node=16`，以及两条求解命令的 `-bootstrap slurm -np 32 -ppn 16`。`Debug` 分区保持不变。
-
-## 5. 设置尺寸、晶核数和步数
-
-修改 `slurm/polygr.slm` 中的参数：
-
-| 参数 | 默认值 | 含义 |
-|---|---:|---|
-| `W`、`H` | 1000、1000 | 薄片尺寸，单位 Å |
-| `N` | 100 | 初始晶核数 |
-| `R` | 2 | 晶核半径，单位为晶格常数 |
-
-工作流沿用旧换算 `int(1024/243*W)`，默认网格为 4213²。要使用已验证的约 100×100 nm 网格，直接将 `PFC_WIDTH` 和 `PFC_HEIGHT` 设为 `4240`；原转换尺度下名义尺寸为 100.017534 nm。模拟 400 个初始晶核时，将 `N` 设为 `400`；生长后保留下来的晶粒数可能变化。
-
-物理参数和推进步数在 `example/step1.in`、`example/step2.in` 中：
+原输入标签及含义保持不变：
 
 | 标签 | 含义 |
 |---|---|
-| `S` | 随机种子；默认工作流随机生成第一阶段种子 |
+| `S` | 随机种子 |
 | `O` | 科学日志间隔、密度保存间隔 |
 | `A` | 网格宽、高 |
 | `I` | 初始化方式；第二阶段用 `I 2` 读取第一阶段结果 |
 | `M` | 原物理模型参数 |
 | `R` | 步数、网格间距、时间步长、盒优化间隔 |
 
-脚本中的晶核半径 `R` 与输入文件的 `R` 标签含义不同。输入文件注释给出了各参数顺序。
+修改步数时，同步修改两份输入的 `R` 行、第二阶段重启文件名，以及后处理命令中的末态文件和绘图区间。运行目录中的输入可直接编辑，源码目录的模板保持原样。
 
-默认每阶段 10000 步，每 1000 步保存一次。修改步数时，同步修改两份输入的 `R` 行、第二阶段重启文件名，以及 `polygr.slm` 中的末态转换文件和绘图区间。固定随机种子后才能复现同一初始构型。
+## 5. 运行两阶段 PFC
 
-## 6. 查看输出
-
-在登录节点查询作业：
+单节点使用 32 个 MPI rank 和 4 张可见 DCU：
 
 ```bash
-squeue --me
-sacct -j JOB_ID --format=JobID,State,Elapsed,ExitCode
+export OMP_NUM_THREADS=1
+export I_MPI_PIN=1
+export I_MPI_PIN_DOMAIN=core
+
+mpirun -bootstrap fork -np 32 -ppn 32 "$PFC_ROOT/bin/polygrpfc" step1 \
+  > step1.stdout 2> step1.stderr
 ```
 
-Slurm 总日志为提交目录中的 `JobID.out` 和 `JobID.err`，计算结果在 `$PFC_ROOT/runs/JobID/dcu/`：
+确认第一阶段成功完成后，运行第二阶段：
+
+```bash
+mpirun -bootstrap fork -np 32 -ppn 32 "$PFC_ROOT/bin/polygrpfc" step2 \
+  > step2.stdout 2> step2.stderr
+```
+
+程序读取当前目录的 `step1.in` 和 `step2.in`；第二阶段读取 `step1-10000.dat`。运行过程中保留原六列科学输出，并记录每个实际推进步的计算时间。
+
+这里的 `-bootstrap fork`、`-ppn` 是 Intel MPI 参数。当前验证保留 32 个真实科学 rank 的初始化和局部统计，每卡由一个执行进程聚合成员的 FFT 与场更新。不要仅为匹配卡数把进程数改成 4，也不要给每个 rank 独占绑定一张卡。
+
+跨节点时，已验证的配置为两节点、每节点 16 rank 和 4 张卡，总计 32 rank。将 `node-a`、`node-b` 替换为可用节点名；两个节点需要相同的运行环境，并能以相同路径访问程序和运行目录：
+
+```bash
+mpirun -hosts node-a,node-b -np 32 -ppn 16 "$PFC_ROOT/bin/polygrpfc" step1 \
+  > step1.stdout 2> step1.stderr
+```
+
+第一阶段成功完成后，再运行：
+
+```bash
+mpirun -hosts node-a,node-b -np 32 -ppn 16 "$PFC_ROOT/bin/polygrpfc" step2 \
+  > step2.stdout 2> step2.stderr
+```
+
+跨节点命令用于新的运行目录，替代上面的单节点命令。节点启动和环境传播按本站 Intel MPI 配置处理；主机与进程布局参数见 [Intel MPI 文档](https://www.intel.com/content/www/us/en/developer/articles/technical/controlling-process-placement-with-the-intel-mpi-library.html)。
+
+## 6. 转换 LAMMPS data
+
+在 DCU 运行目录中，使用 Java Coordinator 提取第二阶段末态的原子坐标和邻居信息：
+
+```bash
+java -jar "$PFC_ROOT/java/coordinator.jar" step2-10000.dat 4240 4240 \
+  0.7 0.7 7.3 2.46 step2-10000.xy step2-10000.nh \
+  > conversion.stdout 2> conversion.stderr
+```
+
+整理为 XYZ，再使用 OVITO 2.9.0 自带的 `ovitos` 导出 LAMMPS data：
+
+```bash
+awk 'END {print NR}' step2-10000.xy > atoms.count
+{
+  cat atoms.count
+  printf '\n'
+  awk '{print $1+1,1,$2,$3,0}' step2-10000.xy
+} > graphene.xyz
+
+ovitos "$PFC_ROOT/source/xyz2lmp.py" >> conversion.stdout 2>> conversion.stderr
+sed -i 's@0.0 0.0 zlo zhi@-10.0 10.0 zlo zhi@g' graphene.data
+```
+
+`xyz2lmp.py` 从当前目录读取 `graphene.xyz`，写出 `graphene.data`；最后一条命令沿用原流程，将 z 方向盒边界设为 −10～10 Å。Java、XYZ 和 OVITO 转换会写固定名称的文件，应在独立运行目录执行。
+
+保留现有 `java/coordinator.jar`，不要直接用接口不同的新版 `Coordinator.java` 重编替换。其他 OVITO 版本需要适配其 Python API 和输出格式。
+
+## 7. 批量导出灰度 PNG
+
+创建独立 Python 环境，安装已验证版本的 NumPy 和 Pillow：
+
+```bash
+python3.11 -m venv "$PFC_ROOT/.venv"
+"$PFC_ROOT/.venv/bin/python" -m pip install numpy==1.24.3 Pillow==9.4.0
+```
+
+回到 DCU 运行目录导出两个阶段的全部保存帧：
+
+```bash
+cd "$PFC_ROOT/runs/graphene-100nm-400"
+"$PFC_ROOT/.venv/bin/python" "$PFC_ROOT/source/plotter.py" \
+  'step1-#.dat' 'step1-#.png' 4240 4240 0 1000 10000
+"$PFC_ROOT/.venv/bin/python" "$PFC_ROOT/source/plotter.py" \
+  'step2-#.dat' 'step2-#.png' 4240 4240 0 1000 10000
+```
+
+`#` 按 `起始步、间隔、终止步` 展开，路径模板需要引号。每阶段导出 11 张图片；图片逐帧归一化为 8 位灰度并上下翻转，常量场输出黑图。已有图片不会被覆盖。
+
+单帧导出的命令为：
+
+```bash
+"$PFC_ROOT/.venv/bin/python" "$PFC_ROOT/source/plotter.py" \
+  step2-10000.dat step2-final-10000.png 4240 4240
+```
+
+求解器、普通 Python 和 OVITO 自带 Python 使用各自的环境；先完成求解，再切换后处理环境，避免不同环境的库路径混入 MPI/HIP 进程。
+
+## 8. 输出文件
 
 | 文件 | 内容 |
 |---|---|
@@ -138,21 +205,25 @@ Slurm 总日志为提交目录中的 `JobID.out` 和 `JobID.err`，计算结果�
 | `step1.out`、`step2.out` | 原六列科学记录 |
 | `step1.stdout`、`step2.stdout` | 求解器输出及逐步计时 |
 | `step1.stderr`、`step2.stderr` | 求解器错误输出 |
-| `step2-10000.xy`、`step2-10000.nh` | 默认末态的原子坐标和邻居信息 |
-| `graphene.data` | LAMMPS 原子初始构型 |
+| `step2-10000.xy`、`step2-10000.nh` | 末态原子坐标和邻居信息 |
+| `graphene.xyz`、`graphene.data` | 原子坐标中间文件和 LAMMPS 初始构型 |
 
-新文件名使用 `PREFIX-STEP.dat` 和 `PREFIX-STEP.png`。密度文件仍无表头、每行一个数、x 方向优先，已有输出不会被覆盖。旧重启路径先按原名查找，缺失时将 `step1-t-10000.dat` 映射到 `step1-10000.dat`。
-
-灰度图片逐帧归一化为 8 位并上下翻转，常量场输出黑图。独立批量导出的接口如下，也需放入 Slurm 脚本：
-
-```text
-python source/plotter.py 'step1-#.dat' 'step1-#.png' W H START INCREMENT END
-```
-
-原子转换保持 `0.7 0.7 7.3 2.46` 尺度，沿用 `java/coordinator.jar`。不要用接口不同的新版 `Coordinator.java` 直接重编替换。
+密度文件保持无表头、每行一个数、x 方向优先的原格式。新名称为 `PREFIX-STEP.dat` 和 `PREFIX-STEP.png`。求解器拒绝覆盖已有输出；旧重启路径先按原名查找，缺失时将 `step1-t-10000.dat` 映射到 `step1-10000.dat`。
 
 ## 验证结果
 
-固定 100×100 nm 算例（4240²，每阶段 2000 步）已通过原容差 CPU/DCU 数值对照：原 CPU 两阶段共 458.16 秒，单节点四卡 DCU 共 83.12 秒，加速比 5.51 倍。计时包含两阶段完整 PFC 求解，排除 LAMMPS 转换和图片导出；两侧转换后均为 388638 个原子。
+固定 100×100 nm 性能算例使用 4240² 网格、100 个初始晶核、每阶段 2000 步。原 CPU 两阶段共 458.16 秒，单节点四卡 DCU 共 83.12 秒，加速比 5.51 倍；两侧末态均通过原容差对照，转换后均为 388638 个原子。
 
-该结果对应已验证的硬件和固定算例，不代表任意尺寸与环境都能达到相同加速比。算例、容差与验证范围见 [validation.md](specs/001-dcu-pfc-acceleration/validation.md)。日常运行脚本不重复执行验收。
+计时覆盖两阶段完整 PFC 求解，包括 MPI 启动、初始化、FFT 规划、推进、通信、日志和数据落盘，排除图片导出及 LAMMPS 转换。上述实测对应固定硬件和工作量，与本文 400 晶核、每阶段 10000 步的运行示例不同。算例、容差与适用范围见 [validation.md](specs/001-dcu-pfc-acceleration/validation.md)。
+
+## 环境模块与 Slurm 部署
+
+需要通过 `module load pfc/2026.1` 管理环境时，先按本站模块名调整 `slurm/modulefiles/pfc/2026.1`，再从仓库根目录注册：
+
+```bash
+cd "$PFC_ROOT"
+module use "$PWD/slurm/modulefiles"
+module load pfc/2026.1
+```
+
+`slurm/` 提供批作业示例，脚本中的 `Debug` 分区和资源声明来自特定集群的部署约定，部署到其他环境时按站点配置调整。模块与模板用法见 [Host.md](Host.md)。个人 SSH、账户、私有配置和运行记录集中保存在被 Git 忽略的 `yhmsr/` 中。

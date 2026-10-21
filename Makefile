@@ -7,27 +7,23 @@ HIP_FLAGS = -O3 -ffp-contract=off -Wall -DMPICH_SKIP_MPICXX --offload-arch=$(PFC
 FFTW_FLAGS = -I$(FFTW_PREFIX)/include -L$(FFTW_PREFIX)/lib -Wl,-rpath,$(FFTW_PREFIX)/lib
 MPI_FLAGS = -I$(I_MPI_ROOT)/include -L$(I_MPI_ROOT)/lib/release -Wl,-rpath,$(I_MPI_ROOT)/lib/release
 
-.PHONY: all batch-guard
+.PHONY: all
 all: bin/polygrpfc bin/polygrpfc_cpu_ref
-
-batch-guard:
-	@test "$(SLURM_JOB_PARTITION)" = Debug || { echo 'Build only inside a Debug Slurm batch job.' >&2; exit 1; }
-	@test -n "$(SLURM_JOB_ID)" -a -n "$(PFC_GPU_ARCH)" || { echo 'Missing allocated job or detected GPU ISA.' >&2; exit 1; }
 
 .build bin:
 	mkdir -p $@
 
-.build/pfc.o: src/pfc.c src/pfc_dcu.h | batch-guard .build
+.build/pfc.o: src/pfc.c src/pfc_dcu.h | .build
 	$(MPICC) -std=c11 $(HOST_FLAGS) -DPFC_DCU $(FFTW_FLAGS) -c $< -o $@
 
-.build/pfc_dcu.o: src/pfc_dcu.hip.cpp src/pfc_dcu.h | batch-guard .build
+.build/pfc_dcu.o: src/pfc_dcu.hip.cpp src/pfc_dcu.h | .build
 	$(HIPCC) -std=c++14 $(HIP_FLAGS) $(MPI_FLAGS) -c $< -o $@
 
-bin/polygrpfc: .build/pfc.o .build/pfc_dcu.o | batch-guard bin
+bin/polygrpfc: .build/pfc.o .build/pfc_dcu.o | bin
 	$(HIPCC) $(HIP_FLAGS) $^ $(FFTW_FLAGS) $(MPI_FLAGS) -L$(DTKROOT)/lib -Wl,-rpath,$(DTKROOT)/lib -lfftw3_mpi -lfftw3 -lhipfft -lmpi -lm -o $@
 
-bin/polygrpfc_cpu_ref: .build/pfc_cpu_ref.c | batch-guard bin
+bin/polygrpfc_cpu_ref: .build/pfc_cpu_ref.c | bin
 	$(MPICC) -std=c11 $(HOST_FLAGS) $(FFTW_FLAGS) $< -lfftw3_mpi -lfftw3 -lm -o $@
 
-.build/pfc_cpu_ref.c: | batch-guard .build
+.build/pfc_cpu_ref.c: | .build
 	git show c86efb51cf03086fb98897ab8abfe2704a62096e:src/pfc.c > $@

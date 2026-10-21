@@ -19,15 +19,19 @@ Do not rebuild the retained Coordinator JAR from newer sources with a different 
 
 ## Build and execution
 
-All compilation, syntax checks, tests, calculations and postprocessing must run in
-Slurm batch jobs. Never run them locally or directly on a login node. Every project
-job must explicitly use `#SBATCH --partition=Debug`; never select another partition.
-Read `README.md` and `Host.md` for public deployment instructions.
+Public users may compile and run directly with the shell commands in `README.md`;
+Slurm and Debug are not prerequisites for using the software. Obtain compiler and
+library paths from the installed toolchain.
 
-Use `slurm/fftw.slm` for the initial FFTW installation, `slurm/build.slm` to build
-`bin/polygrpfc`, and `slurm/polygr.slm` for the two-stage workflow. Load
-`pfc/2026.1` after registering the repository's module directory. Adapt module names
-to the site; obtain compiler and library paths from the loaded toolchain.
+For agents working in this managed session, all compilation, syntax checks, tests,
+calculations and postprocessing must still run in the managed cluster's Slurm Debug
+batch jobs. Never execute them locally or directly on its login node, submit to
+another partition, or fall back. This agent/deployment restriction does not apply
+to public users on their own systems.
+
+The optional `slurm/fftw.slm`, `slurm/build.slm` and `slurm/polygr.slm` are
+managed-deployment examples. For that deployment, register the repository module
+directory and load `pfc/2026.1`; adapt module names to the site.
 
 Keep `.slm` files as sequential commands with `#!/bin/bash -e` and resources in
 `#SBATCH` directives. Do not add conditionals, workflow wrappers, `set -euo pipefail`,
@@ -43,7 +47,7 @@ paths and save required project paths before changing module environments.
 
 ## Validation
 
-Run only minimal, separately submitted validation; no full suite, production-length
+Agents run only minimal validation in managed Debug batch jobs; no full suite, production-length
 validation or parameter scan. Reuse existing results for documentation-only changes.
 V1 uses the frozen short input; V2 reuses its CPU reference across two nodes.
 V3 is the fixed 100×100 nm performance case: 4240² grid, 2000 steps per stage.
@@ -53,7 +57,7 @@ Compare against original commit `c86efb51cf03086fb98897ab8abfe2704a62096e` with 
 seed, MPI decomposition, physical parameters and output cadence. Keep the CPU source
 unchanged. Field tolerances are `1e-6 + 1e-5*abs(CPU)`; scientific diagnostic
 tolerances are `1e-8 + 1e-6*abs(CPU)`. Do not relax tolerances after seeing results.
-A successful Slurm exit alone does not establish numerical agreement or speedup.
+A successful process or Slurm exit alone does not establish numerical agreement or speedup.
 Keep detailed job provenance private and publish only anonymized validation summaries.
 
 ## Style and contributions

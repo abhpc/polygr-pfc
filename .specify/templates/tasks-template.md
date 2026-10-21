@@ -13,7 +13,11 @@ description: "Task list template for feature implementation"
 evidence are REQUIRED for solver migration by the constitution. Other test tasks follow the
 specification. Documentation-only changes require static text review.
 
-**Execution**: Every build and test, including CPU baseline and auxiliary validation, MUST
+Public users may build and run with the direct shell commands in README; do not require
+Slurm, Debug or a private cluster module for public installation. The execution restrictions
+below apply to agents in this managed session and its private cluster deployment only.
+
+**Execution**: Every agent build and test, including CPU baseline and auxiliary validation, MUST
 run in sbatch jobs submitted through the target Slurm cluster, never locally or directly on login nodes.
 Use sequential `.slm` files with `#!/bin/bash -e`, explicit paths and
 `#SBATCH --partition=Debug` plus resources. Do not generate repeated shell partition/node/rank
@@ -98,7 +102,7 @@ Examples of foundational tasks (adjust based on your project):
 
 ### Tests for User Story 1 (required for solver migration) ⚠️
 
-> Define checks FIRST; run them only through cluster Slurm batch jobs. New behavior checks
+> Define checks FIRST; agents run them only through managed Debug Slurm jobs. New behavior checks
 > must expose missing behavior before implementation; existing CPU baseline checks may pass.
 
 - [ ] T010 [P] [US1] Contract test for [endpoint] in tests/contract/test_[name].py
@@ -170,14 +174,14 @@ Examples of foundational tasks (adjust based on your project):
 
 Include mandatory cluster tasks for CPU/DCU field/density/free-energy comparisons, both stages
 and restart/conversion compatibility, followed by matched-workload performance measurements.
-Attach Slurm evidence and leave unrun or failed checks incomplete.
+Attach actual execution evidence (Slurm records for managed agents) and leave unrun or failed checks incomplete.
 
 - [ ] TXXX [P] Documentation updates in docs/
 - [ ] TXXX Cleanup strictly required by DCU acceleration
 - [ ] TXXX Performance optimization across all stories
 - [ ] TXXX [P] Additional unit tests (if requested) in tests/unit/
 - [ ] TXXX Preserve error handling at modified DCU boundaries
-- [ ] TXXX Run quickstart.md validation through cluster Slurm batch jobs
+- [ ] TXXX Run agent validation through managed Debug Slurm jobs; public quickstart follows README
 
 ---
 
@@ -201,7 +205,7 @@ Attach Slurm evidence and leave unrun or failed checks incomplete.
 ### Within Each User Story
 
 - Define required numerical checks and tolerances before implementation; new behavior checks
-  must expose missing behavior in cluster Slurm jobs, while CPU baseline checks may already pass
+  must expose missing behavior in managed-agent Debug Slurm jobs, while CPU baseline checks may already pass
 - Models before services
 - Services before endpoints
 - Core implementation before integration
@@ -221,7 +225,7 @@ Attach Slurm evidence and leave unrun or failed checks incomplete.
 ## Parallel Example: User Story 1
 
 ```bash
-# Submit independent test jobs through the target Slurm cluster/Slurm (solver validation is mandatory):
+# Agents submit independent test jobs through the managed Debug Slurm cluster (solver validation is mandatory):
 Task: "Contract test for [endpoint] in tests/contract/test_[name].py"
 Task: "Integration test for [user journey] in tests/integration/test_[name].py"
 
@@ -268,7 +272,7 @@ With multiple developers:
 - [P] tasks = different files, no dependencies
 - [Story] label maps task to specific user story for traceability
 - Each user story should be independently completable and testable
-- Run all builds/tests through the target Slurm cluster/Slurm; no local or login-node execution
+- Agents run all builds/tests through managed Debug Slurm jobs; no agent local/login-node execution
 - Verify new behavior checks expose missing behavior before implementing
 - Commit after each task or logical group
 - Stop at any checkpoint to validate story independently

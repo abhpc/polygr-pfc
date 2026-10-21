@@ -12,6 +12,10 @@
 
 ## Technical Context
 
+Public users may build and run with the direct shell commands in README; do not require
+Slurm, Debug or a private cluster module for public installation. The execution restrictions
+below apply to agents in this managed session and its private cluster deployment only.
+
 <!--
   ACTION REQUIRED: Replace the content in this section with the technical details
   for the project. The structure here is presented in advisory capacity to guide
@@ -25,10 +29,10 @@
 **Storage**: [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
 
 **Testing**: [CPU/DCU numerical equivalence, two-stage/conversion regression and performance;
-all builds and tests via Debug-only Slurm batch jobs submitted through the target Slurm cluster]
+agent builds and tests via managed Debug Slurm jobs; public shell use is described in README]
 
-**Target Platform**: [DCU compute nodes allocated by Slurm in the Debug partition through the target Slurm cluster;
-confirm devices, toolchain, FFT library and account; no other partition is allowed]
+**Target Platform**: [Compatible MPI/DCU environment for public users; managed agents use
+allocated Debug Slurm nodes and confirm devices, toolchain and FFT library]
 
 **Project Type**: [e.g., library/cli/web-service/mobile-app/compiler/desktop-app or NEEDS CLARIFICATION]
 
@@ -47,7 +51,7 @@ confirm devices, toolchain, FFT library and account; no other partition is allow
 - [ ] **Physics unchanged**: Map migrated operations to the original CPU formulas and discrete
   algorithms; preserve FP64, dynamics, FFT normalization, boundaries and box optimization.
 - [ ] **Compatibility**: Preserve inputs, CLI, restart/state data, both stages and LAMMPS conversion.
-- [ ] **Cluster execution**: All compilation and tests, including CPU baseline and auxiliary
+- [ ] **Managed-agent execution**: Agent compilation and tests, including CPU baseline and auxiliary
   validation, use sequential `.slm` scripts submitted through the target Slurm cluster with `sbatch path/to/job.slm`.
   Set `#SBATCH --partition=Debug` and resources in the script, use `#!/bin/bash -e` and explicit
   paths, and do not add `set -euo pipefail`, `${VAR:?}`, shell partition/node/rank guards

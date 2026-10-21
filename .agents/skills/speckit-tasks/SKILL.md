@@ -137,12 +137,16 @@ The tasks.md should be immediately executable - each task must be specific enoug
 
 ## Task Generation Rules
 
+Public users may build and run with the direct shell commands in README; do not require
+Slurm, Debug or a private cluster module for public installation. The execution restrictions
+below apply to agents in this managed session and its private cluster deployment only.
+
 **CRITICAL**: Tasks MUST be organized by user story to enable independent implementation and testing.
 
 **Constitution-required validation is mandatory**: For DCU solver migration, generate tasks
 for a traceable CPU baseline, fixed inputs/initial fields/seeds, predefined numerical metrics
 and tolerances, CPU/DCU comparisons, two-stage/restart/LAMMPS conversion regression, and
-matched-workload performance evidence after correctness passes. All compilation and tests,
+matched-workload performance evidence after correctness passes. Agent compilation and tests,
 including auxiliary validation, MUST use sbatch jobs submitted through the target Slurm cluster. Generate
 sequential `.slm` scripts with `#!/bin/bash -e`, explicit paths and `#SBATCH --partition=Debug`
 plus resources, submitted with `sbatch path/to/job.slm`. For this project,

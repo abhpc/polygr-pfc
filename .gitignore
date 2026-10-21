@@ -2,6 +2,7 @@
 /build/
 /.build/
 /.local/
+/.venv/
 /runs/
 /evidence/
 /yhmsr/

@@ -19,5 +19,5 @@
 接口与验证要求以 [spec.md](spec.md)、[data-model.md](data-model.md) 和 [contracts/](contracts/) 为准。
 冻结输入为 `tests/fixtures/v1/`、`tests/fixtures/v3/`；V2复用V1 CPU结果。
 密度容差为 `1e-6+1e-5*abs(CPU)`，科学诊断容差为 `1e-8+1e-6*abs(CPU)`，不能事后放宽。
-所有编译、语法检查、测试与计算仅通过目标Slurm集群的Debug批作业执行；禁止本机或登录节点执行。
+公共安装和直接Shell运行见README，不以Slurm为前提；本会话代理的编译、语法检查、测试与计算仍仅通过受管集群Debug批作业执行，禁止本机或登录节点直接执行。
 不增加全量回归、参数扫描或生产时长作业。匿名结果与限制见 [validation.md](validation.md)。

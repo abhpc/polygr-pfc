@@ -10,12 +10,16 @@
 
 ## Constitution Constraints *(mandatory)*
 
+Public users may build and run with the direct shell commands in README; do not require
+Slurm, Debug or a private cluster module for public installation. The execution restrictions
+below apply to agents in this managed session and its private cluster deployment only.
+
 - Limit all code changes to DCU acceleration and its necessary build, scheduling,
   compatibility and validation support; explicitly list unrelated work as out of scope.
 - Identify the original CPU baseline and physical/discrete-algorithm invariants. Preserve
   formulas, FP64, dynamics, FFT normalization, boundaries, time stepping and box optimization.
 - Preserve input/CLI/restart formats, the two-stage workflow and downstream LAMMPS conversion.
-- Perform every compilation and test only in Slurm batch jobs submitted through the target Slurm cluster with
+- Agents perform every compilation and test only in managed Slurm batch jobs submitted through the target Slurm cluster with
   `#SBATCH --partition=Debug` in sequential `.slm` files, including CPU baseline, auxiliary
   checks and performance runs. Use `#!/bin/bash -e`, explicit paths and `#SBATCH` resources;
   do not add `set -euo pipefail`, `${VAR:?}`, shell partition/node/rank guards or workflow wrappers. No other
@@ -25,7 +29,7 @@
   separately; the solver's per-step timing requirement remains unchanged.
 - Specify numerical error metrics, absolute/relative tolerances and their rationale before
   execution, using identical inputs, fixed seeds and initial fields. Define matched-workload
-  speed measurements and the Slurm evidence required for acceptance.
+  speed measurements and actual execution evidence required for acceptance (Slurm records for managed agents).
 
 ## User Scenarios & Testing *(mandatory)*
 

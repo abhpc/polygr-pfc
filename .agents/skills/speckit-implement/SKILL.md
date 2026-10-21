@@ -18,12 +18,16 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 ## Project Constitution Constraints
 
+Public users may build and run with the direct shell commands in README; do not require
+Slurm, Debug or a private cluster module for public installation. The execution restrictions
+below apply to agents in this managed session and its private cluster deployment only.
+
 All code changes MUST directly enable DCU acceleration or its necessary build, scheduling,
 compatibility and validation support. Preserve the original physical formulas, discrete
 algorithms, FP64, two-stage workflow and data interfaces.
 
 Every dependency/program build, syntax check, test, calculation, conversion validation and
-benchmark MUST run in sbatch jobs submitted through the target Slurm cluster on allocated
+benchmark performed by this agent MUST run in sbatch jobs submitted through the target Slurm cluster on allocated
 compute nodes. Debug is the only allowed partition: never submit elsewhere, use a partition
 list or fall back. For this project, `.slm` files MUST use sequential
 commands, `#!/bin/bash -e`, explicit project/run paths and `#SBATCH --partition=Debug` plus

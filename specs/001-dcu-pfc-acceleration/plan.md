@@ -1,5 +1,9 @@
 # Implementation Plan: DCU 双精度 PFC 加速与批量灰度导出
 
+公共安装与直接Shell编译、运行命令见[README](../../README.md)。Slurm/Debug仅约束本会话代理的
+受管集群执行及私有部署；公共用户不以此为安装前提。下文调度设计保留本次实现/验证背景，
+科学公式、FP64、固定输入与容差不受此范围澄清影响。
+
 **Branch**: `master`
 **Date**: 2026-10-20 | **Spec**: [spec.md](spec.md)
 
@@ -27,20 +31,20 @@
 **Storage**: 集群共享文件系统上的输入、文本密度、PNG、坐标、LAMMPS 数据及作业日志。
 无数据库。源码、依赖安装、二进制和每次运行目录分开。
 
-**Testing**: 最小 assert/数值对照工具，不引入测试框架；所有构建、语法检查、比较与图片验证
-仅在经 目标 Slurm 集群 提交的 Slurm 批作业。冻结输入和资源见 [research.md](research.md) 第 10 节。
+**Testing**: 最小 assert/数值对照工具，不引入测试框架；本会话代理的构建、语法检查、
+比较与图片验证仍只在受管集群Debug批作业执行，公共用户的命令见README。冻结输入和资源见 [research.md](research.md) 第 10 节。
 
-**Target Platform**: 目标Slurm集群的 `Debug` 分区，验证资源为每节点32物理CPU核、4 DCU。
+**Target Platform**: 本次代理实施与历史验证采用受管Slurm集群的 `Debug` 分区，验证资源为每节点32物理CPU核、4 DCU。
 账户、模块安装位置和内存申请按目标站点配置，不使用登录节点硬件代替计算节点信息。
 日常脚本以 `#SBATCH --partition=Debug` 明确分区，只包含顺序构建/运行命令。
 
-**Project Type**: 科学计算命令行工具及 Slurm 批处理流程。
+**Project Type**: 科学计算命令行工具，附受管部署的Slurm批处理示例。
 
 **Performance Goals**: 单节点 32 核原 CPU 与相同节点 4 DCU 比较，固定 V3 的完整两阶段耗时
 至少 5 倍；跨节点要求正确完成，不附加未经要求的线性扩展门槛。
 
 **Constraints**: FP64、不改物理/离散算法、不降低 CPU 利用、保持输入格式和原诊断副作用；
-新名称为安全前缀加整数 step；禁止本机/登录节点测试、全量回归和参数扫描。
+新名称为安全前缀加整数 step；禁止代理在本机/登录节点测试，以及全量回归和参数扫描。
 
 **Scale/Scope**: V1 为 256²、每阶段 128 步；V2 复用 V1，32 rank 跨两节点；
 V3 为100×100 nm：4240²、名义100.017534 nm、每阶段2000步。灰度迁移仅 Plotter，不重写其他 Java 分析/原子转换工具。
@@ -54,7 +58,7 @@ V3 为100×100 nm：4240²、名义100.017534 nm、每阶段2000步。灰度迁�
 | DCU 范围 | 通过 | 通过 | C/HIP、构建/调度和验证直接服务于加速；Python绘图和新命名属于功能范围 |
 | 物理不变 | 通过 | 通过 | 保留原算子/归一化、32 rank 初始化、主机 fp 累加和盒优化，详见研究第 3–6 节 |
 | 兼容 | 通过 | 通过 | 原标签/字段、旧重启文件精确优先/同目录回退、旧 JAR 与转换参数保持 |
-| 集群执行 | 通过 | 通过 | 所有编译与计算仅在Slurm Debug批作业执行，无其他分区或回退 |
+| 集群执行 | 通过 | 通过 | 本次代理编译与计算仅在受管Slurm Debug批作业执行，无其他分区或回退 |
 | 证据与最小验证 | 通过 | 通过 | 基准提交、固定算例、容差上限、外部计时与作业证据有明确契约 |
 
 不存在需要豁免的关卡。
@@ -95,7 +99,7 @@ slurm/
 ├── build.slm             # 程序构建
 └── polygr.slm            # 适配原工作流、新命名及 Python 绘图
 tests/
-├── minimal.py            # 最小比较/断言，只有批作业调用
+├── minimal.py            # 最小比较/断言，受管代理仅在批作业调用
 └── fixtures/
     ├── v1/step1.in, step2.in
     └── v3/step1.in, step2.in
@@ -152,7 +156,7 @@ flowchart LR
 
 ### 设备与主机资源
 
-用 MPI 共享内存通信域确定 node-local rank，在 Slurm 可见的 4 个设备中按 local_rank%4 选择。
+用 MPI 共享内存通信域确定 node-local rank，在执行环境可见的 4 个设备中按 local_rank%4 选择。
 不设置每 task 独占一张 GPU，也不取消调度器可见性限制；启动记录 global/local rank、主机、
 设备身份与绑定，并记录leader/member角色及实际执行进程。每节点4个执行进程驱动4卡，
 仍有32个真实科学rank；不得将host科学划分缩成4rank或全局重启统计。
@@ -162,9 +166,9 @@ DCU进程读取GPU sysfs local_cpulist，在各节点原MPI分配CPU集合的并
 每节点先由local rank0读取设备PCI信息并广播，其他GPU执行进程在首次HIP调用前绑定，
 避免已创建运行线程留在其他科学rank的核心；实际选卡后再次核对PCI身份。
 主机诊断保持全局 rank 的原顺序/分块，V2 仅改变进程所在节点。
-单节点在已有Debug分配内使用Intel MPI fork启动，同作业CPU/DCU相同；跨节点继续Slurm启动。
+历史受管验证在已有Debug分配内使用Intel MPI fork启动，同作业CPU/DCU相同；跨节点使用Slurm启动。公共MPI命令见README。
 参考[Intel Hydra文档](https://www.intel.com/content/www/us/en/docs/mpi-library/developer-reference-linux/2021-15/hydra-environment-variables.html)。
-构建和运行脚本必须在 `#SBATCH` 中显式指定Debug，不切换分区。
+受管部署的构建和运行脚本必须在 `#SBATCH` 中显式指定Debug，不切换分区。
 日常脚本不加入测试、元数据生成、外层计时或探针。
 
 ### 输入、文件与绘图
@@ -204,7 +208,7 @@ FFTW 依赖自身也固定为同一原生 O3 构建及 MPI/SSE2/AVX/AVX2 配置�
 | V2 | 同一256²算例，32rank跨2节点，节点设备均实际工作，复用V1 CPU末态 | 不做节点数/扩展率扫描 |
 | V3 | 4240²两阶段2000步，同节点32核CPU/4DCU各一次，末态合格且总时间比≥5 | 不先额外跑一次代表性算例，不追加生产时长 |
 
-构建准入与实际检查只能在相应 Slurm 作业中；预先核对 fixture 哈希、输出目录和资源，
+本会话代理的构建准入与实际检查只能在相应Debug批作业中；预先核对 fixture 哈希、输出目录和资源，
 不得在观察性能后改变网格、步数、物理参数、输出间隔或 CPU 配额。
 运行目录采用 `PFC_RUN_ROOT/SLURM_JOB_ID`，参考与候选输出独立。
 失败只允许有记录的定向排错/重跑，不自动扩大测试矩阵；未达标保留未完成状态。

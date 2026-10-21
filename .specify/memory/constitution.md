@@ -1,11 +1,13 @@
 <!--
 Sync Impact Report
-- Version change: 1.2.0 → 1.2.1 (PATCH: public documentation and deployment-record separation)
-- Principle semantics unchanged: Debug-only Slurm execution, FP64, original physics,
-  predefined tolerances and simple daily job scripts remain mandatory.
-- Updated: feature documentation, project-specific skill constraints and templates.
-- Site-specific accounts, paths and original operational records are excluded from public documentation.
-- No solver changes or new execution in this documentation update.
+- Version change: 1.2.1 → 1.2.2 (PATCH: clarify public use versus managed-agent execution scope)
+- Principle IV: Debug-only Slurm is a managed-agent/private-deployment rule, not a public prerequisite.
+- Public users may compile and run directly using README shell commands.
+- Unchanged: this session's agent execution boundary, FP64, physics, tolerances and simple .slm examples.
+- Updated: AGENTS.md; .agents/skills/speckit-{implement,tasks}/SKILL.md;
+  .specify/templates/{plan,spec,tasks}-template.md; feature scope, contracts and quickstart.
+- Added/removed principles: none; principle IV scope clarified; no pending propagation.
+- Historical anonymous Debug validation facts retained; no solver changes or execution.
 -->
 # polygr-pfc Constitution
 
@@ -38,28 +40,28 @@ DCU 资源选择只能增加必要的执行配置，MUST NOT 改变输入中物�
 密度场到原子坐标及 LAMMPS 初始构型的转换链路 MUST 保持可用，
 以避免求解器加速后产生下游工具无法使用的结果。
 
-### IV. 仅在 Debug 分区通过 Slurm 编译与测试
+### IV. 区分公共使用与受管代理执行
 
-所有依赖与程序编译、语法或可执行检查、单元测试、集成测试、数值回归、性能测试、
-试算及转换验证 MUST 仅通过目标 Slurm 集群的登录节点以 `sbatch` 提交批处理脚本，
-在 Slurm 分配的计算节点执行。所有项目作业 MUST 在 `.slm` 文件中显式写入
-`#SBATCH --partition=Debug`，包括依赖构建、原 CPU 基准、验证辅助工具与生产计算。
-MUST NOT 提交到其他分区、采用分区列表或在 Debug 不可用时自动切换分区。
-MUST NOT 在本机或目标 Slurm 集群的登录节点直接编译、测试或计算，也不得以交互运行绕过批处理要求。
+公共用户 MUST 能按 README 中的直接 Shell 命令编译、运行和后处理。
+Slurm、Debug 分区及私有站点调度规则 MUST NOT 成为公共安装或使用前提。
 
-`.slm` MUST 使用 `#!/bin/bash -e`、直接设置的项目/运行路径
-及顺序命令，资源由 `#SBATCH` 声明，以 `sbatch 脚本路径` 提交。
+本会话代理在受管集群执行依赖/程序编译、语法或可执行检查、测试、数值回归、
+性能测试、试算及转换验证时，MUST 仍经该集群提交 Slurm 批作业，在分配的计算节点执行。
+代理使用的 `.slm` MUST 显式声明 `#SBATCH --partition=Debug`；
+MUST NOT 改用其他分区、分区列表或自动回退，也 MUST NOT 在本机或登录节点直接执行上述任务。
+这项执行限制属于受管代理及私有部署，不限制公共用户自己的执行环境。
+
+提供的 `.slm` 示例 MUST 使用 `#!/bin/bash -e` 及顺序命令，资源由 `#SBATCH` 声明。
 MUST NOT 重新加入 `set -euo pipefail`、`${VAR:?}`、分区/节点/进程数的重复Shell检查，
 或用Shell分支、包装函数隐藏作业流程。
 日常 `.slm` MUST 仅保留构建/运行命令，MUST NOT 调用tests、
 evidence/metadata生成、`/usr/bin/time`、设备探针或调试验证；验证材料与日常运行路径分开。
 既有科学与性能验收记录 MUST 保留；公开摘要不包含账户、主机、作业编号或部署路径。
 移除Shell外层计时封装 MUST NOT 删除求解器原科学逐步计时日志。
-日常调度简化不改变唯一Debug分区、Slurm执行边界、物理算法或既定数值容差。
 
-本机仅可用于文档与源码编辑、静态文本审阅、文件同步以及远程作业提交和状态查询。
-DCU 计算作业 MUST 显式申请实际可用的 DCU 资源；账户、分区、设备及工具链 MUST
-以 Debug 分区实际配置为准，不能沿用历史分区或登录节点硬件信息。
+代理本机仅可用于编辑、静态文本审阅、文件同步及受管集群作业管理。
+代理DCU作业 MUST 申请实际可用设备并遵循该部署的Debug资源配置；
+公共用户自行提供兼容的MPI/DCU环境，公共命令不得强制依赖私有调度设施。
 
 ### V. 数值等价与加速证据
 
@@ -72,14 +74,14 @@ DCU 计算作业 MUST 显式申请实际可用的 DCU 资源；账户、分区�
 
 性能结论 MUST 在数值验证通过后，以相同科学工作量的 CPU/DCU 对照为依据。
 MUST 区分内核时间与包含初始化、FFT、通信、数据传输和 I/O 的求解器总时间，
-记录硬件、软件版本、编译选项、输入、资源配置、Slurm Job ID、退出状态与日志路径。
-没有集群实测证据时 MUST 明确标记为未验证，不能宣称已正确运行或获得加速。
+记录硬件、软件版本、编译选项、输入、资源配置、退出状态与日志路径；使用调度器时记录作业身份。
+没有实际运行证据时 MUST 明确标记为未验证，不能宣称已正确运行或获得加速。
 
 ## Scope and Execution Constraints
 
 - `src/pfc.c` 是当前两阶段 MPI/FFTW 求解器入口；`source/` 包含其他求解器及 Java 工具。
   计划 MUST 确认实际修改范围，不得将整个目录中的工具默认纳入重写。
-- DCU 编程环境与 FFT 库的具体选择 MUST 在集群环境核实后进入计划；本宪章不预设库版本、
+- DCU 编程环境与 FFT 库的具体选择 MUST 在目标环境核实后进入计划；本宪章不预设库版本、
   设备型号、设备数量或多卡能力，也不代表 DCU 后端已经实现。
 - 构建和运行 MUST 使用独立工作目录，保留基准、输入及日志；MUST NOT 将生成数据和无关二进制
   混入源码提交。运行目录 MUST 与源码分离，保留既有输入和结果。
@@ -88,23 +90,23 @@ MUST 区分内核时间与包含初始化、FFT、通信、数据传输和 I/O �
 ## Development Workflow and Quality Gates
 
 1. **规格关卡**：列出加速目标、范围外事项、物理不变量、兼容接口、数值容差与可测量性能目标。
-2. **计划关卡**：明确 CPU 基准、DCU 工具链、运算到原公式的映射、资源申请方式和 Slurm
-   编译/验证方案；研究前及设计后逐项通过 Constitution Check。
-3. **任务关卡**：将集群构建、CPU/DCU 数值对照、两阶段转换回归和性能测量列为迁移必需任务。
+2. **计划关卡**：明确 CPU 基准、DCU 工具链、运算到原公式的映射、资源和编译/验证方案；
+   代理执行遵守受管Debug批作业边界，公共用户可使用直接Shell命令；研究前及设计后逐项通过 Constitution Check。
+3. **任务关卡**：将构建、CPU/DCU 数值对照、两阶段转换回归和性能测量列为迁移必需任务。
    文档变更仅需静态审阅；不因模板示例将迁移验证标为可选。
-4. **实现关卡**：每项代码改写说明加速目的及保持的物理运算；构建和所有测试只通过集群批处理。
-5. **验收关卡**：审阅最小必要差异及集群作业证据，数值与兼容性先通过，再报告性能。
+4. **实现关卡**：每项代码改写说明加速目的及保持的物理运算；代理的构建和所有测试只通过受管Debug批作业。
+5. **验收关卡**：审阅最小必要差异及实际执行证据，数值与兼容性先通过，再报告性能。
    无法运行或证据不足时保持任务未完成，明确阻塞原因。
 
 ## Governance
 
 本宪章优先于仓库中冲突的模板、历史命令示例与开发惯例；执行时仍须遵守用户的明确指令。
 每份规格、计划、任务清单及 PR MUST 核查五项原则，记录数值影响、执行位置与验证证据。
-不得使用 Complexity Tracking、性能收益或测试便利性豁免 DCU 范围、物理不变和集群执行要求。
+不得使用 Complexity Tracking、性能收益或测试便利性豁免 DCU 范围、物理不变和受管代理执行要求。
 
 修订 MUST 记录动机、条款变化、影响及同步文件；改变既有约束 MUST 先取得项目维护者明确授权，
 再正式修订宪章及全部受影响模板和指引。版本采用语义化版本：原则删除或不兼容重定义升 MAJOR，
 新增原则或实质扩展升 MINOR，文字澄清与非语义修正升 PATCH。
 每次修订 MUST 更新顶部 Sync Impact Report、版本与最后修订日期，保留首次批准日期。
 
-**Version**: 1.2.1 | **Ratified**: 2026-10-20 | **Last Amended**: 2026-10-21
+**Version**: 1.2.2 | **Ratified**: 2026-10-20 | **Last Amended**: 2026-10-21

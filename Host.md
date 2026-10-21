@@ -1,6 +1,6 @@
-# 集群部署说明
+# Slurm 集群部署示例
 
-本文只描述公开部署方法。个人 SSH 地址、端口、账户、站点路径、模块清单和作业记录保存在本地 `yhmsr/` 目录；该目录已被 `.gitignore` 忽略，不随仓库发布。
+本文说明可选的环境模块和 Slurm 部署方式，直接编译、运行命令见 [README.md](README.md)。个人 SSH 地址、端口、账户、站点路径、模块清单和作业记录保存在本地 `yhmsr/` 目录；该目录已被 `.gitignore` 忽略，不随仓库发布。
 
 ## 查询模块
 
@@ -45,9 +45,9 @@ slmscript cp slm.vasp-dcu
 
 `slmscript cp` 只把模板复制到当前目录，不提交作业。VASP 模板仅用于参考资源声明和模块加载方式；PFC 应使用本仓库的 `.slm` 脚本。模板中的账户、分区、路径和应用命令必须按项目修改。
 
-## 提交规则
+## 提交示例
 
-编译、依赖构建、测试、计算和后处理都必须经 Slurm 批作业执行。项目脚本显式指定 `#SBATCH --partition=Debug`，不得提交其他分区。
+仓库附带脚本的 `#SBATCH --partition=Debug` 来自特定集群的部署约定。公共程序可直接编译和运行；使用 Slurm 的站点需要按实际调度规则配置分区、账户和资源。
 
 公开脚本不写个人账户或 QoS，使用集群默认值；需要指定时，保存在自己的作业副本中。单节点示例申请 32 个 MPI rank、4 张 DCU。不同 DCU 架构需修改 `build.slm` 的 `PFC_GPU_ARCH`；跨节点配置见 README。
 
@@ -58,4 +58,4 @@ sbatch /path/to/polygr-pfc/slurm/build.slm
 sbatch /path/to/polygr-pfc/slurm/polygr.slm
 ```
 
-先确认构建完成，再提交计算。不要在登录节点直接编译、运行求解器或后处理。完整安装与运行步骤见 [README.md](README.md)。
+先确认构建完成，再提交计算。登录节点的使用遵循所在站点的规定。完整安装与直接运行步骤见 [README.md](README.md)。

@@ -4,6 +4,10 @@
 
 计算分为两个阶段：`step1` 生成并生长晶粒，`step2` 读取第一阶段末态进行结构弛豫。DCU 负责 FFT 和场更新；原子转换沿用 Java Coordinator 和 OVITO，灰度图片由 Python 导出。
 
+![约100×100 nm、400个初始晶核的多晶石墨烯生长动画](docs/images/step1-growth-preview-white.gif)
+
+展示案例：约 100×100 nm、400 个初始晶核的第一阶段生长过程，从第 0 步演化至第 10000 步，每 1000 步取一帧，共 11 帧循环播放。
+
 编译与运行示例使用 Linux、Intel MPI 和单节点 4 张 DCU。使用资源调度系统时，按所在站点的规则申请计算资源。Slurm 部署示例见 [Host.md](Host.md)。
 
 ## 1. 获取源码并设置环境
